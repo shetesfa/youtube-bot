@@ -498,27 +498,12 @@
 
   function confirmSend() {
     const selectedList = Array.from(selectedIndices);
-    if (!selectedList.length) return;
-
-    const payload = {
-      action: 'download',
-      format: format,
-      quality: quality,
-      indices: selectedList
-    };
-
-    // Attempt 1: Telegram WebApp sendData if inside inline keyboard button
-    if (tg && tg.sendData) {
-      try {
-        tg.sendData(JSON.stringify(payload));
-        tg.close();
-        return;
-      } catch (e) {
-        console.warn('tg.sendData not available in this context:', e);
-      }
+    if (!selectedList.length) {
+      alert('Please select at least 1 video!');
+      return;
     }
 
-    // Attempt 2: Universal Telegram Deep Link URL (works on EVERY Telegram client & Menu button!)
+    // Direct Telegram Deep Link (100% reliable on every Telegram client!)
     const deepParam = `DL_${quality}_${selectedList.join('_')}`;
     const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=${deepParam}`;
 
