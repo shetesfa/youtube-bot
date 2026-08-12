@@ -2,7 +2,7 @@
 Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 
 Features:
-- Stateless Deep Link Handler: Accepts video IDs directly (DL_720p_id1_id2...) - 100% Session Independent!
+- Universal Message Router: Catches 100% of WebApp data updates, deep links (/start DL_...), & URLs
 - Supports 200+ video playlists via ?list=PLAYLIST_ID parameter & RSS XML parser
 - Short URL encoding (never triggers URI Too Long, max 100 chars)
 - Tesfa YouTube Downloader Web App UI with Filter Chips & Format Sheet
@@ -488,8 +488,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             urls = []
             session = SESSIONS.get(user_id)
 
-            # Check if arguments are numeric indices OR direct video IDs
-            all_digits = all(x.isdigit() for x in raw_items)
+            all_digits = all(x.isdigit() for x in raw_items) if raw_items else False
             if all_digits and session and session.get("entries"):
                 entries = session["entries"]
                 for x in raw_items:
@@ -499,7 +498,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
                         urls.append(vid_url)
             else:
-                # Direct Video IDs (Stateless!)
                 for v in raw_items:
                     if len(v) >= 5:
                         urls.append(f"https://www.youtube.com/watch?v={v}")
@@ -520,7 +518,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 parse_mode="Markdown"
             )
             
-            # Run download directly for urls
             user_dir = DOWNLOAD_DIR / str(user_id)
             user_dir.mkdir(exist_ok=True)
             progress_msg = await update.message.reply_text(f"⏳ **Downloading:** `0/{len(urls)}` items processed...", parse_mode="Markdown")
@@ -585,7 +582,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    url = update.message.text.strip()
+    if update.message and update.message.web_app_data:
+        await handle_web_app_data(update, context)
+        return
+
+    url = update.message.text.strip() if update.message and update.message.text else ""
+    if update.message and update.message.text and update.message.text.startswith("/start"):
+        await start(update, context)
+        return
+
     if "youtube.com" not in url and "youtu.be" not in url:
         await update.message.reply_text("❌ Please send a valid YouTube video or playlist link.")
         return
@@ -684,15 +689,18 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         if session and session.get("entries"):
             entries = session["entries"]
             for idx in indices:
-                if 0 <= idx < len(entries):
+                if isinstance(idx, int) and 0 <= idx < len(entries):
                     e = entries[idx]
                     urls.append(e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}")
 
         if not urls and data.get("video_ids"):
             urls = [f"https://www.youtube.com/watch?v={v}" for v in data["video_ids"]]
 
+        if not urls and data.get("ids"):
+            urls = [f"https://www.youtube.com/watch?v={v}" for v in data["ids"]]
+
         if not urls:
-            await update.message.reply_text("⚠️ Selection received! Downloading your videos now...")
+            await update.message.reply_text("⚠️ Selection received! Processing your download request...")
             return
 
         await update.message.reply_text(
@@ -990,11 +998,10 @@ def main() -> None:
     start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Stateless Video ID support...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Universal Message Router...")
     app.run_polling()
 
 
