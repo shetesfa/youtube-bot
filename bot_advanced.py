@@ -37,13 +37,23 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import shutil
 import yt_dlp
 
+FFMPEG_PATH = None
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
-    FFMPEG_PATH = None
+    pass
+
+if not FFMPEG_PATH or not Path(FFMPEG_PATH).exists():
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except Exception:
+        pass
+    FFMPEG_PATH = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -56,6 +66,11 @@ DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 COOKIE_FILE = Path("cookies.txt")
+if not COOKIE_FILE.exists() and os.environ.get("YOUTUBE_COOKIES"):
+    try:
+        COOKIE_FILE.write_text(os.environ["YOUTUBE_COOKIES"])
+    except Exception as e:
+        logger.warning(f"Could not write YOUTUBE_COOKIES to cookies.txt: {e}")
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
@@ -212,11 +227,18 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "no_warnings": True,
         "noplaylist": True,
         "ignoreerrors": False,
+        "nocheckcertificate": True,
+        "geo_bypass": True,
         "concurrent_fragment_downloads": 5,
         "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android_vr", "android", "ios", "mweb"]
+                "player_client": ["android", "ios", "mweb"]
             }
         }
     }
@@ -248,18 +270,34 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
             {"key": "FFmpegMetadata"},
         ]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filepath = None
-        if info and info.get("requested_downloads"):
-            filepath = info["requested_downloads"][0].get("filepath")
-        if not filepath and info:
-            filepath = ydl.prepare_filename(info)
-            
-        if quality == "audio" and filepath:
-            filepath = str(Path(filepath).with_suffix(".mp3"))
-        elif quality == "m4a" and filepath:
-            filepath = str(Path(filepath).with_suffix(".m4a"))
+    info = None
+    last_err = None
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:
+        logger.warning(f"Primary download attempt failed for {url}: {e}. Retrying with fallback options...")
+        last_err = str(e)
+        fallback_opts = dict(ydl_opts)
+        fallback_opts["format"] = "best[ext=mp4]/best" if quality not in ("audio", "m4a") else "ba/b/best"
+        fallback_opts.pop("postprocessors", None)
+        try:
+            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        except Exception as e2:
+            logger.error(f"Fallback download also failed for {url}: {e2}")
+            last_err = str(e2)
+
+    filepath = None
+    if info and info.get("requested_downloads"):
+        filepath = info["requested_downloads"][0].get("filepath")
+    if not filepath and info:
+        filepath = ydl.prepare_filename(info) if 'ydl' in locals() else None
+        
+    if quality == "audio" and filepath:
+        filepath = str(Path(filepath).with_suffix(".mp3"))
+    elif quality == "m4a" and filepath:
+        filepath = str(Path(filepath).with_suffix(".m4a"))
 
     # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
     if not filepath or not Path(filepath).exists():
@@ -304,6 +342,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "path": filepath,
         "thumb_path": thumb_path,
         "duration": info.get("duration") if info else None,
+        "error": last_err,
     }
 
 
@@ -517,8 +556,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
                         urls.append(vid_url)
                 else:
-                    if len(x) >= 3:
-                        urls.append(f"https://www.youtube.com/watch?v={x}")
+                    if x != "video" and len(x) >= 3:
+                        if x.startswith("http"):
+                            urls.append(x)
+                        else:
+                            urls.append(f"https://www.youtube.com/watch?v={x}")
 
             if not urls and session and session.get("entries"):
                 entries = session["entries"]
@@ -973,11 +1015,13 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 
 async def _send_result(chat, item: dict) -> None:
     if not item.get("path"):
-        await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.")
+        err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
+        await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
         return
     path = Path(item["path"])
     if not path.exists():
-        await chat.send_message(f"❌ Couldn't find file for '{item['title']}'.")
+        err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
+        await chat.send_message(f"❌ Couldn't find file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
         return
     
     thumb_path = item.get("thumb_path")
