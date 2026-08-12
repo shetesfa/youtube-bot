@@ -309,10 +309,8 @@
     const listId = params.get('list');
     const raw = params.get('data');
     
-    if (listId) {
-      fetchPlaylistFromRSS(listId, ids ? ids.split(',') : []);
-    } else if (ids) {
-      const idList = ids.split(',');
+    if (ids) {
+      const idList = ids.split(',').filter(Boolean);
       playlistData = idList.map((id, index) => {
         return {
           id: id,
@@ -324,6 +322,11 @@
         };
       });
       init();
+      if (listId) {
+        enrichTitlesFromRSS(listId);
+      }
+    } else if (listId) {
+      fetchPlaylistFromRSS(listId);
     } else if (raw) {
       try {
         const parsed = JSON.parse(decodeURIComponent(raw));
@@ -342,12 +345,70 @@
     }
   };
 
-  async function fetchPlaylistFromRSS(listId, fallbackIds = []) {
+  async function fetchRSSRaw(listId) {
+    const targetUrl = 'https://www.youtube.com/feeds/videos.xml?playlist_id=' + listId;
+    const proxies = [
+      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(proxy, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.includes('<entry')) return text;
+        }
+      } catch (e) {
+        console.warn('Proxy fetch failed/timed out:', proxy, e);
+      }
+    }
+    throw new Error('All RSS proxies failed or timed out.');
+  }
+
+  async function enrichTitlesFromRSS(listId) {
+    try {
+      const xmlText = await fetchRSSRaw(listId);
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+      const entries = xmlDoc.querySelectorAll('entry');
+      
+      const idMap = new Map();
+      entries.forEach(entry => {
+        const title = entry.querySelector('title')?.textContent;
+        const ytVid = entry.getElementsByTagName('yt:videoId')[0] || entry.getElementsByTagName('videoId')[0];
+        let vId = ytVid?.textContent?.trim();
+        if (!vId) {
+          const link = entry.querySelector('link[href*="v="]');
+          if (link) {
+            const m = (link.getAttribute('href') || '').match(/v=([^&]+)/);
+            if (m) vId = m[1];
+          }
+        }
+        if (vId && title) idMap.set(vId, title);
+      });
+
+      let updated = false;
+      playlistData.forEach(item => {
+        if (idMap.has(item.id)) {
+          item.title = idMap.get(item.id);
+          updated = true;
+        }
+      });
+      if (updated) render();
+    } catch (e) {
+      console.warn('Background title enrichment failed:', e);
+    }
+  }
+
+  async function fetchPlaylistFromRSS(listId) {
     document.getElementById('list').innerHTML = `<div class="empty"><div class="glyph">⏳</div><b>Loading videos…</b>Fetching playlist items</div>`;
     try {
-      const rssUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://www.youtube.com/feeds/videos.xml?playlist_id=' + listId)}`;
-      const res = await fetch(rssUrl);
-      const text = await res.text();
+      const xmlText = await fetchRSSRaw(listId);
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(text, 'text/xml');
       const entries = xmlDoc.querySelectorAll('entry');
@@ -356,21 +417,14 @@
         const title = entry.querySelector('title')?.textContent || `Video ${index + 1}`;
         let videoId = '';
         const ytVid = entry.getElementsByTagName('yt:videoId')[0] || entry.getElementsByTagName('videoId')[0];
-        if (ytVid && ytVid.textContent) {
-          videoId = ytVid.textContent.trim();
-        }
+        if (ytVid && ytVid.textContent) videoId = ytVid.textContent.trim();
         if (!videoId) {
           const link = entry.querySelector('link[href*="v="]');
           if (link) {
-            const href = link.getAttribute('href') || '';
-            const m = href.match(/v=([^&]+)/);
+            const m = (link.getAttribute('href') || '').match(/v=([^&]+)/);
             if (m) videoId = m[1];
           }
         }
-        if (!videoId && fallbackIds[index]) {
-          videoId = fallbackIds[index];
-        }
-
         const author = entry.querySelector('author name')?.textContent || 'YouTube';
         return {
           id: videoId,
@@ -384,19 +438,12 @@
       init();
     } catch (e) {
       console.error('RSS fetch error:', e);
-      if (fallbackIds && fallbackIds.length) {
-        playlistData = fallbackIds.map((id, index) => ({
-          id: id,
-          title: `Video ${index + 1}`,
-          thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-          duration: 'N/A',
-          durationSeconds: 0,
-          channel: 'YouTube'
-        }));
-        init();
-      } else {
-        document.getElementById('list').innerHTML = `<div class="empty"><div class="glyph">⚠️</div><b>Could not load playlist</b>Paste the link on Telegram chat to process.</div>`;
-      }
+      document.getElementById('list').innerHTML = `
+        <div class="empty">
+          <div class="glyph">⚠️</div>
+          <b>Could not load live RSS preview</b>
+          You can still send the playlist link directly in Telegram chat to download all videos!
+        </div>`;
     }
   }
 

@@ -238,7 +238,8 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "mweb"]
+                "player_client": ["mweb", "ios", "android", "tv_embedded"],
+                "player_skip": ["webpage", "configs"]
             }
         }
     }
@@ -1015,8 +1016,21 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 
 async def _send_result(chat, item: dict) -> None:
     if not item.get("path"):
-        err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
-        await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
+        err_msg = str(item.get("error", ""))
+        if "Sign in" in err_msg or "bot" in err_msg or "cookies" in err_msg:
+            await chat.send_message(
+                f"⚠️ **YouTube Bot Verification Required:**\n\n"
+                f"YouTube is asking for authentication for '{item['title']}' on cloud server (Render).\n\n"
+                f"💡 **1-Minute Fix (Add Cookies to Render):**\n"
+                f"1. Install 'Get cookies.txt LOCALLY' extension in Chrome/Firefox.\n"
+                f"2. Export your cookies from YouTube.\n"
+                f"3. Go to **Render Dashboard** -> **Environment**.\n"
+                f"4. Add variable `YOUTUBE_COOKIES` and paste the cookies text!\n",
+                parse_mode="Markdown"
+            )
+        else:
+            err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
+            await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
         return
     path = Path(item["path"])
     if not path.exists():
