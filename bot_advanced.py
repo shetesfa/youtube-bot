@@ -4,13 +4,12 @@ Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 Features:
 - Single video & Playlist support with rich metadata & thumbnails
 - 5-Photo Album Grid Carousel: See 5 video thumbnails side-by-side in chat!
-- Interactive Side-Scrolling Playlist Viewer & 1-Click "Download Full Playlist"
+- Interactive Side-Scrolling Playlist Viewer & Web App Gallery (GitHub Pages CDN)
 - Perfect Native Aspect Ratio Cover Art Thumbnail previews on sent Telegram videos
 - Single-Pass Ultra Fast Downloads (up to 5 parallel downloads)
 - Advanced Anti-Bot Extractor Clients (tv, android_vr, mweb, android, ios, web)
 - Smart Subtitles: Amharic (am) for Amharic videos & English (en) for World videos
 - Subtitles soft-embedded directly into Video streams in < 0.5s
-- Integrated Web Server for Render Health Check & Web Gallery Hosting
 """
 
 import os
@@ -67,7 +66,7 @@ QUALITY_FORMATS = {
 }
 
 def start_health_server():
-    """Runs a lightweight HTTP server for Render health checks & web gallery hosting."""
+    """Runs a daemon HTTP server for Render health checks."""
     port = int(os.environ.get("PORT", 8080))
     class HealthHandler(SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -75,7 +74,7 @@ def start_health_server():
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(b"<h1>YouTube Bot & Web Gallery Active 24/7!</h1>")
+                self.wfile.write(b"<h1>YouTube Bot Active 24/7!</h1>")
             else:
                 super().do_GET()
 
@@ -86,7 +85,7 @@ def start_health_server():
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        logger.info(f"Health check & Web Gallery server started on port {port}")
+        logger.info(f"Health check server started on port {port}")
     except Exception as e:
         logger.warning(f"Could not start health server on port {port}: {e}")
 
@@ -314,11 +313,10 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🖼️ View Photo Grid (5 Videos)", callback_data="view_grid")
     ])
 
-    # Dynamic Web Gallery Link hosted on Render
-    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://my-youtube-bot-8672.onrender.com")
-    web_gallery_url = f"{render_url}/web_gallery.html"
+    # Super-fast GitHub Pages Web App URL (Instant 0.01s load)
+    github_pages_url = "https://shetesfa.github.io/youtube-bot/web_gallery.html"
     buttons.append([
-        InlineKeyboardButton("🌐 Open Side-Scroll Web Gallery", web_app=WebAppInfo(url=web_gallery_url))
+        InlineKeyboardButton("🌐 Open Instant Web Gallery ⚡", web_app=WebAppInfo(url=github_pages_url))
     ])
 
     for offset, e in enumerate(page_entries):
@@ -465,7 +463,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "✨ **Features:**\n"
         "• Single Videos & Full Playlists (1-Click Download All)\n"
         "• 5-Photo Album Grid: See 5 video thumbnails side-by-side in chat!\n"
-        "• Interactive Side-Scrolling Playlist Viewer & Web App Gallery\n"
+        "• Instant GitHub Pages Side-Scrolling Web Gallery\n"
         "• Native Aspect Ratio Cover Art Thumbnail Previews\n"
         "• High Speed 5-Parallel Downloads & Single-Pass Subtitle Extraction\n"
         "• Quality Options: 1080p / 720p / 480p / 360p / MP3 / M4A\n\n"
@@ -509,7 +507,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_chat.send_message(
             f"📋 **Playlist Found:** {playlist_title}\n"
             f"📊 **Total Videos:** {len(entries)}\n\n"
-            f"👇 *Tap '⚡ DOWNLOAD ALL' to download everything, or tap '🖼️ View Photo Grid' / '🌐 Open Web Gallery':*",
+            f"👇 *Tap '⚡ DOWNLOAD ALL' to download everything, or tap '🖼️ View Photo Grid' / '🌐 Open Instant Web Gallery':*",
             parse_mode="Markdown",
             reply_markup=_get_playlist_keyboard(user_id)
         )
@@ -794,7 +792,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Ultra YouTube Downloader Bot starting with Health Server & Web Gallery on Render...")
+    logger.info("Ultra YouTube Downloader Bot starting with GitHub Pages Instant Web Gallery...")
     app.run_polling()
 
 
