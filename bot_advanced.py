@@ -163,27 +163,41 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction using android_vr, android, & ios clients."""
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": "in_playlist",
-        "skip_download": True,
-        "socket_timeout": 10,
-        "playlistend": 250,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android_vr", "android", "ios", "mweb"]
+    """Sub-second metadata extraction with multi-client rotation."""
+    clients = [
+        ["android_vr", "android", "ios", "mweb"],
+        ["ios", "mweb", "android"],
+        ["tv", "android"]
+    ]
+    last_err = None
+    for client_list in clients:
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": "in_playlist",
+                "skip_download": True,
+                "socket_timeout": 10,
+                "playlistend": 250,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": client_list
+                    }
+                }
             }
-        }
-    }
-    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-        ydl_opts["cookiefile"] = str(COOKIE_FILE)
-    if FFMPEG_PATH:
-        ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+            if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+                ydl_opts["cookiefile"] = str(COOKIE_FILE)
+            if FFMPEG_PATH:
+                ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        return ydl.extract_info(url, download=False)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    raise Exception("Could not fetch video info.")
 
 
 def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dict:
@@ -596,7 +610,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         info = await loop.run_in_executor(None, _get_info, url)
     except Exception as e:
         logger.exception("Failed to fetch info")
-        await status_msg.edit_text(f"❌ Couldn't read that link: {e}")
+        err_str = str(e)
+        if "Sign in" in err_str or "bot" in err_str or "429" in err_str:
+            await status_msg.edit_text("⚠️ YouTube is currently enforcing bot verification for this specific video. Please try another video or playlist link!")
+        else:
+            await status_msg.edit_text(f"❌ Couldn't read that link: {e}")
         return
 
     entries = info.get("entries")
@@ -994,7 +1012,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with latest yt-dlp nightly master & combined format fallback...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Multi-Client Rotation & Graceful Bot Error Handling...")
     app.run_polling()
 
 
