@@ -503,8 +503,9 @@
       return;
     }
 
-    // Direct Telegram Deep Link (100% reliable on every Telegram client!)
-    const deepParam = `DL_${quality}_${selectedList.join('_')}`;
+    const videoIds = selectedList.map(i => playlistData[i]?.id).filter(Boolean);
+    const idParam = videoIds.length ? videoIds.join('_') : selectedList.join('_');
+    const deepParam = `DL_${quality}_${idParam}`;
     const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=${deepParam}`;
 
     if (tg && tg.openTelegramLink) {

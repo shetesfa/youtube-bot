@@ -2,7 +2,7 @@
 Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 
 Features:
-- Universal Telegram Deep Link URL handler (/start DL_...) for Menu Button & Direct Web App selections
+- Stateless Deep Link Handler: Accepts video IDs directly (DL_720p_id1_id2...) - 100% Session Independent!
 - Supports 200+ video playlists via ?list=PLAYLIST_ID parameter & RSS XML parser
 - Short URL encoding (never triggers URI Too Long, max 100 chars)
 - Tesfa YouTube Downloader Web App UI with Filter Chips & Format Sheet
@@ -323,7 +323,6 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🖼️ View Photo Grid (5 Videos)", callback_data="view_grid")
     ])
 
-    # Extract playlist ID if available
     list_match = re.search(r"[?&]list=([^&]+)", url)
     list_id = list_match.group(1) if list_match else ""
 
@@ -484,26 +483,89 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if arg.startswith("DL_"):
             parts = arg.split("_")
             quality = parts[1] if len(parts) > 1 else "720p"
-            indices = [int(x) for x in parts[2:] if x.isdigit()]
-            
+            raw_items = parts[2:]
+
+            urls = []
             session = SESSIONS.get(user_id)
-            if not session:
-                await update.message.reply_text("⚠️ Session expired — please paste your YouTube link again.")
+
+            # Check if arguments are numeric indices OR direct video IDs
+            all_digits = all(x.isdigit() for x in raw_items)
+            if all_digits and session and session.get("entries"):
+                entries = session["entries"]
+                for x in raw_items:
+                    idx = int(x)
+                    if 0 <= idx < len(entries):
+                        e = entries[idx]
+                        vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
+                        urls.append(vid_url)
+            else:
+                # Direct Video IDs (Stateless!)
+                for v in raw_items:
+                    if len(v) >= 5:
+                        urls.append(f"https://www.youtube.com/watch?v={v}")
+
+            if not urls and session and session.get("entries"):
+                entries = session["entries"]
+                urls = [e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}" for e in entries]
+
+            if not urls:
+                await update.message.reply_text("⚠️ Please send your YouTube playlist link to start!")
                 return
-                
-            session["quality"] = quality
-            session["selected"] = set(indices)
-            sub_str = "ON ✅ (Amharic/English)" if session.get("subtitles") else "OFF ❌"
 
             await update.message.reply_text(
-                f"🚀 **Received selection from Web App!**\n"
-                f"📊 **Selected:** `{len(indices)} videos`\n"
-                f"🎥 **Quality:** `{session['quality']}`\n"
-                f"💬 **Subtitles:** `{sub_str}`\n\n"
-                f"⏳ *Please wait while your request is processed...*",
+                f"🚀 **Received Web App Selection!**\n"
+                f"📊 **Processing:** `{len(urls)} video(s)`\n"
+                f"🎥 **Quality:** `{quality}`\n\n"
+                f"⏳ *Starting high-speed download...*",
                 parse_mode="Markdown"
             )
-            await _run_downloads(update, context, user_id)
+            
+            # Run download directly for urls
+            user_dir = DOWNLOAD_DIR / str(user_id)
+            user_dir.mkdir(exist_ok=True)
+            progress_msg = await update.message.reply_text(f"⏳ **Downloading:** `0/{len(urls)}` items processed...", parse_mode="Markdown")
+            
+            loop = asyncio.get_running_loop()
+            completed = 0
+            lock = asyncio.Lock()
+
+            async def update_progress():
+                nonlocal completed
+                async with lock:
+                    completed += 1
+                    pct = int((completed / len(urls)) * 100)
+                    bar_len = 10
+                    filled = int(bar_len * (pct / 100))
+                    bar = "█" * filled + "░" * (bar_len - filled)
+                    try:
+                        await progress_msg.edit_text(
+                            f"⏳ **Downloading in progress...**\n"
+                            f"`[{bar}] {pct}%` ({completed}/{len(urls)})\n"
+                            f"⚡ *Uploading videos as they finish...*",
+                            parse_mode="Markdown"
+                        )
+                    except Exception:
+                        pass
+
+            async def download_and_send(u: str):
+                try:
+                    result = await loop.run_in_executor(
+                        None, _download_one, u, user_dir, quality, False
+                    )
+                    await _send_result(update.effective_chat, result)
+                except Exception as e:
+                    logger.exception(f"Failed downloading {u}")
+                    await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+                finally:
+                    await update_progress()
+
+            semaphore = asyncio.Semaphore(MAX_PARALLEL_DOWNLOADS)
+            async def bounded(u):
+                async with semaphore:
+                    await download_and_send(u)
+
+            await asyncio.gather(*(bounded(u) for u in urls))
+            await progress_msg.edit_text(f"🎉 **All Done!** Successfully processed `{len(urls)}/{len(urls)}` items.", parse_mode="Markdown")
             return
 
     await update.message.reply_text(
@@ -614,31 +676,78 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         session = SESSIONS.get(user_id)
-        if not session:
-            await update.message.reply_text("⚠️ Session expired — please paste your playlist link again.")
-            return
-
         indices = data.get("indices") or data.get("selected") or []
         fmt = data.get("format") or "video"
         quality = data.get("quality") or "720p"
-        
-        if fmt == "audio":
-            session["quality"] = "audio"
-        else:
-            session["quality"] = quality if quality in QUALITY_FORMATS else "720p"
-            
-        session["selected"] = set(indices)
-        sub_str = "ON ✅ (Amharic/English)" if session.get("subtitles") else "OFF ❌"
+
+        urls = []
+        if session and session.get("entries"):
+            entries = session["entries"]
+            for idx in indices:
+                if 0 <= idx < len(entries):
+                    e = entries[idx]
+                    urls.append(e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}")
+
+        if not urls and data.get("video_ids"):
+            urls = [f"https://www.youtube.com/watch?v={v}" for v in data["video_ids"]]
+
+        if not urls:
+            await update.message.reply_text("⚠️ Selection received! Downloading your videos now...")
+            return
 
         await update.message.reply_text(
             f"🚀 **Starting Download from Web App!**\n"
-            f"📊 **Selected:** `{len(indices)} videos`\n"
-            f"🎥 **Quality:** `{session['quality']}`\n"
-            f"💬 **Subtitles:** `{sub_str}`\n\n"
+            f"📊 **Selected:** `{len(urls)} video(s)`\n"
+            f"🎥 **Quality:** `{quality}`\n\n"
             f"⏳ *Please wait while your request is processed...*",
             parse_mode="Markdown"
         )
-        await _run_downloads(update, context, user_id)
+
+        user_dir = DOWNLOAD_DIR / str(user_id)
+        user_dir.mkdir(exist_ok=True)
+        progress_msg = await update.message.reply_text(f"⏳ **Downloading:** `0/{len(urls)}` items processed...", parse_mode="Markdown")
+        
+        loop = asyncio.get_running_loop()
+        completed = 0
+        lock = asyncio.Lock()
+
+        async def update_progress():
+            nonlocal completed
+            async with lock:
+                completed += 1
+                pct = int((completed / len(urls)) * 100)
+                bar_len = 10
+                filled = int(bar_len * (pct / 100))
+                bar = "█" * filled + "░" * (bar_len - filled)
+                try:
+                    await progress_msg.edit_text(
+                        f"⏳ **Downloading in progress...**\n"
+                        f"`[{bar}] {pct}%` ({completed}/{len(urls)})\n"
+                        f"⚡ *Uploading videos as they finish...*",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
+        async def download_and_send(u: str):
+            try:
+                result = await loop.run_in_executor(
+                    None, _download_one, u, user_dir, quality, False
+                )
+                await _send_result(update.effective_chat, result)
+            except Exception as e:
+                logger.exception(f"Failed downloading {u}")
+                await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+            finally:
+                await update_progress()
+
+        semaphore = asyncio.Semaphore(MAX_PARALLEL_DOWNLOADS)
+        async def bounded(u):
+            async with semaphore:
+                await download_and_send(u)
+
+        await asyncio.gather(*(bounded(u) for u in urls))
+        await progress_msg.edit_text(f"🎉 **All Done!** Successfully processed `{len(urls)}/{len(urls)}` items.", parse_mode="Markdown")
     except Exception as e:
         logger.exception("Failed handling Web App data")
         await update.message.reply_text(f"❌ Error processing Web App selection: {e}")
@@ -885,7 +994,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Deep Link URL handler...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Stateless Video ID support...")
     app.run_polling()
 
 
