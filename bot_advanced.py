@@ -51,7 +51,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947851594:AAEbygJcMz0wuubBbTcnzKtgITK5MVTHSHI")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947851594:AAF4AC_vVSxxYMChCcysPULPafaCMkcC2To")
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
@@ -71,7 +71,7 @@ QUALITY_FORMATS = {
 }
 
 def start_health_server():
-    """Runs a daemon HTTP server for Render / Railway health checks."""
+    """Runs a daemon HTTP server for health checks."""
     port = int(os.environ.get("PORT", 8080))
     class HealthHandler(SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -156,20 +156,6 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
     except Exception as e:
         logger.warning(f"Subtitle embedding failed: {e}")
     return video_path
-
-
-async def _safe_edit_message(query, text: str, reply_markup=None) -> None:
-    """Safely edits text OR photo caption depending on message type."""
-    try:
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
-    except Exception:
-        try:
-            await query.edit_message_caption(caption=text, parse_mode="Markdown", reply_markup=reply_markup)
-        except Exception:
-            try:
-                await query.edit_message_reply_markup(reply_markup=reply_markup)
-            except Exception:
-                pass
 
 
 # ---------- Fast yt-dlp helpers ----------
@@ -1001,7 +987,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Universal Message Router...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Revoked Fresh Token...")
     app.run_polling()
 
 
