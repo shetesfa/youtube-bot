@@ -387,6 +387,7 @@
     const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=SEARCH_${encodeURIComponent(val).slice(0,50)}`;
     if (tg && tg.openTelegramLink) {
       tg.openTelegramLink(deepUrl);
+      if (tg.close) tg.close();
     } else {
       window.location.href = deepUrl;
     }
@@ -516,16 +517,17 @@
       video_ids: videoIds
     };
 
-    // Send via sendData (for Inline Keyboard WebApps)
+    // 1. Send via sendData if inside inline keyboard WebApp
     if (tg && tg.sendData) {
       try {
         tg.sendData(JSON.stringify(payload));
       } catch (e) { console.warn(e); }
     }
 
-    // Send via deepLink (for Menu Buttons & Direct Web Views)
-    if (tg && tg.openTelegramLink) {
-      tg.openTelegramLink(deepUrl);
+    // 2. Open Telegram chat AND auto-close WebApp on phone!
+    if (tg) {
+      if (tg.openTelegramLink) tg.openTelegramLink(deepUrl);
+      if (tg.close) tg.close();
     } else {
       window.location.href = deepUrl;
     }
