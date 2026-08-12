@@ -1,0 +1,12 @@
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.jpg
+*.png
+*.webp
+*.srt
+*.vtt
+__pycache__/
+*.log
+.env
