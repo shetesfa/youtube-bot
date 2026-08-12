@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Tesfa · YouTube Downloader</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#101a14;
+    --paper:#f7f4ec;
+    --panel:#12201a;
+    --panel-2:#182b22;
+    --coffee:#3e2723;
+    --gold:#e8b23e;
+    --gold-dim:#8a6a24;
+    --leaf:#2f9e5b;
+    --leaf-dim:#1f6b3d;
+    --clay:#c0522f;
+    --text:#f3efe4;
+    --text-dim:#a9b8ae;
+    --line:rgba(243,239,228,0.09);
+    --radius:16px;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    background:
+      radial-gradient(1100px 500px at 50% -10%, rgba(232,178,62,0.10), transparent 60%),
+      var(--ink);
+    color:var(--text);
+    font-family:'Manrope',sans-serif;
+    min-height:100vh;
+    padding-bottom:calc(96px + var(--safe-b));
+  }
+
+  /* ---------- Header ---------- */
+  header.top{
+    padding:22px 18px 14px;
+    position:relative;
+    overflow:hidden;
+  }
+  header.top::before{
+    content:"";
+    position:absolute; inset:0;
+    background: linear-gradient(180deg, rgba(232,178,62,0.08), transparent 70%);
+    pointer-events:none;
+  }
+  .eyebrow{
+    display:flex; align-items:center; gap:8px;
+    font-size:0.68rem; letter-spacing:0.18em; text-transform:uppercase;
+    color:var(--gold); font-weight:700; margin-bottom:6px;
+  }
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--leaf);box-shadow:0 0 0 3px rgba(47,158,91,0.18);}
+  h1.brand{
+    font-family:'Fraunces',serif;
+    font-weight:700;
+    font-size:1.85rem;
+    line-height:1.05;
+    letter-spacing:-0.01em;
+  }
+  h1.brand em{
+    font-style:normal;
+    background:linear-gradient(120deg,#e8b23e,#c0522f 70%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .sub{color:var(--text-dim); font-size:0.85rem; margin-top:4px;}
+
+  /* ---------- URL intake ---------- */
+  .intake{
+    margin:14px 18px 6px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:12px;
+    display:flex; gap:8px;
+  }
+  .intake input{
+    flex:1; background:transparent; border:none; outline:none;
+    color:var(--text); font-family:'Manrope',sans-serif; font-size:0.88rem; padding:6px 4px;
+  }
+  .intake input::placeholder{color:var(--text-dim);}
+  .intake button{
+    background:var(--leaf); color:#08160f; border:none; border-radius:10px;
+    font-weight:800; font-size:0.82rem; padding:0 16px; cursor:pointer;
+  }
+
+  /* ---------- Meta / stats bar ---------- */
+  .statbar{
+    display:flex; justify-content:space-between; align-items:center;
+    margin:16px 18px 10px;
+  }
+  .statbar .count{font-family:'Fraunces',serif; font-size:1.1rem;}
+  .statbar .count b{color:var(--gold);}
+  .chip-row{display:flex; gap:8px; flex-wrap:wrap; margin:0 18px 14px;}
+  .chip{
+    border:1px solid var(--line); background:var(--panel);
+    color:var(--text-dim); font-size:0.72rem; font-weight:700;
+    padding:6px 11px; border-radius:999px; cursor:pointer; transition:.15s;
+  }
+  .chip.active{background:var(--leaf-dim); color:#d8f5e2; border-color:transparent;}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{
+    display:flex; gap:8px; margin:0 18px 16px; flex-wrap:wrap;
+  }
+  .btn{
+    flex:1;
+    border:1px solid var(--line); background:var(--panel-2);
+    color:var(--text); font-weight:700; font-size:0.78rem;
+    padding:10px 12px; border-radius:12px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    transition:.15s; white-space:nowrap;
+  }
+  .btn:active{transform:scale(0.97);}
+  .btn.ghost{background:transparent;}
+
+  /* ---------- Cards ---------- */
+  .list{
+    display:flex; flex-direction:column; gap:10px; padding:0 18px;
+  }
+  .vcard{
+    background:var(--panel);
+    border:1.5px solid var(--line);
+    border-radius:var(--radius);
+    display:flex; gap:12px; padding:10px;
+    cursor:pointer; transition:.15s ease;
+    position:relative;
+  }
+  .vcard.selected{
+    border-color:var(--leaf);
+    background:linear-gradient(180deg, rgba(47,158,91,0.10), rgba(47,158,91,0.03));
+  }
+  .thumb{
+    position:relative; width:118px; height:78px; flex:0 0 auto;
+    border-radius:10px; overflow:hidden; background:#000;
+  }
+  .thumb img{width:100%;height:100%;object-fit:cover; display:block;}
+  .dur{
+    position:absolute; bottom:5px; right:5px; background:rgba(0,0,0,0.82);
+    color:#fff; font-size:0.62rem; font-weight:700; padding:2px 5px; border-radius:5px;
+  }
+  .idx{
+    position:absolute; top:5px; left:5px; background:rgba(0,0,0,0.6);
+    color:#fff; font-size:0.62rem; font-weight:700; padding:1px 6px; border-radius:5px;
+  }
+  .check{
+    position:absolute; top:5px; right:5px; width:20px; height:20px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.85); background:rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900; color:#fff;
+  }
+  .vcard.selected .check{background:var(--leaf); border-color:var(--leaf); color:#08160f;}
+  .vbody{flex:1; min-width:0; display:flex; flex-direction:column; justify-content:space-between;}
+  .vtitle{
+    font-size:0.83rem; font-weight:600; line-height:1.32;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .vmeta{display:flex; align-items:center; gap:6px; margin-top:6px;}
+  .vmeta span{font-size:0.68rem; color:var(--text-dim);}
+  .vmeta .sep{width:3px;height:3px;border-radius:50%;background:var(--text-dim);}
+
+  /* ---------- Empty state ---------- */
+  .empty{
+    text-align:center; padding:60px 24px; color:var(--text-dim);
+  }
+  .empty .glyph{font-size:2.2rem; margin-bottom:10px;}
+  .empty b{color:var(--text); display:block; margin-bottom:4px; font-family:'Fraunces',serif; font-size:1.05rem;}
+
+  /* ---------- Format sheet ---------- */
+  .sheet-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.55); backdrop-filter:blur(2px);
+    z-index:40; opacity:0; pointer-events:none; transition:opacity .2s;
+  }
+  .sheet-overlay.open{opacity:1; pointer-events:auto;}
+  .sheet{
+    position:fixed; left:0; right:0; bottom:0; z-index:41;
+    background:var(--panel-2); border-top:1px solid var(--line);
+    border-radius:20px 20px 0 0; padding:18px 18px calc(18px + var(--safe-b));
+    transform:translateY(100%); transition:transform .25s ease;
+  }
+  .sheet.open{transform:translateY(0);}
+  .sheet .handle{width:36px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 14px;}
+  .sheet h3{font-family:'Fraunces',serif; font-size:1.05rem; margin-bottom:12px;}
+  .fmt-group{display:flex; gap:8px; margin-bottom:14px;}
+  .fmt-opt{
+    flex:1; border:1.5px solid var(--line); border-radius:12px; padding:10px 8px;
+    text-align:center; cursor:pointer; font-size:0.78rem; font-weight:700; color:var(--text-dim);
+  }
+  .fmt-opt.active{border-color:var(--gold); color:var(--gold); background:rgba(232,178,62,0.08);}
+  .quality-row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;}
+  .q-opt{
+    border:1.5px solid var(--line); border-radius:10px; padding:8px 12px;
+    font-size:0.76rem; font-weight:700; color:var(--text-dim); cursor:pointer;
+  }
+  .q-opt.active{border-color:var(--leaf); color:#d8f5e2; background:rgba(47,158,91,0.10);}
+  .sheet-cta{
+    width:100%; background:var(--leaf); color:#08160f; border:none; border-radius:12px;
+    padding:14px; font-weight:800; font-size:0.9rem; cursor:pointer;
+  }
+
+  /* ---------- Sticky action bar ---------- */
+  .action-bar{
+    position:fixed; left:0; right:0; bottom:0; z-index:30;
+    padding:12px 18px calc(12px + var(--safe-b));
+    background:linear-gradient(180deg, transparent, var(--ink) 30%);
+  }
+  .action-bar .inner{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:16px;
+    padding:10px 12px; display:flex; align-items:center; gap:10px;
+  }
+  .action-bar .info{flex:1; min-width:0;}
+  .action-bar .info .n{font-weight:800; font-size:0.86rem;}
+  .action-bar .info .s{font-size:0.68rem; color:var(--text-dim);}
+  .go-btn{
+    background:linear-gradient(120deg,#e8b23e,#c0522f);
+    color:#1a0e08; border:none; border-radius:11px; padding:12px 18px;
+    font-weight:800; font-size:0.85rem; cursor:pointer; white-space:nowrap;
+  }
+  .go-btn:disabled{opacity:0.4;}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="eyebrow"><span class="dot"></span>TESFA · CONNECTED TO TELEGRAM</div>
+  <h1 class="brand">Tesfa <em>YouTube</em> Downloader</h1>
+  <div class="sub">Pick your videos, choose a format, and Tesfa will send them straight to this chat.</div>
+</header>
+
+<div class="intake">
+  <input id="urlInput" placeholder="Paste a playlist or video link…" />
+  <button onclick="loadFromInput()">Load</button>
+</div>
+
+<div class="statbar">
+  <div class="count"><b id="totalCount">0</b> videos found</div>
+  <div class="count" style="font-size:0.75rem;color:var(--text-dim);" id="selCountLabel">0 selected</div>
+</div>
+
+<div class="chip-row" id="filterRow" style="display:none;">
+  <div class="chip active" data-f="all" onclick="setFilter('all')">All</div>
+  <div class="chip" data-f="short" onclick="setFilter('short')">Under 5 min</div>
+  <div class="chip" data-f="long" onclick="setFilter('long')">5+ min</div>
+  <div class="chip" data-f="selected" onclick="setFilter('selected')">Selected</div>
+</div>
+
+<div class="toolbar" id="toolbar" style="display:none;">
+  <button class="btn" onclick="selectAll()">✓ Select all</button>
+  <button class="btn ghost" onclick="clearAll()">Clear</button>
+</div>
+
+<div class="list" id="list">
+  <div class="empty">
+    <div class="glyph">☕️🎬</div>
+    <b>No videos yet</b>
+    Send a playlist or video link on Telegram, or paste one above, to see it here.
+  </div>
+</div>
+
+<div class="sheet-overlay" id="sheetOverlay" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <div class="handle"></div>
+  <h3>Download format</h3>
+  <div class="fmt-group">
+    <div class="fmt-opt active" data-fmt="video" onclick="setFormat('video')">🎞️ Video (MP4)</div>
+    <div class="fmt-opt" data-fmt="audio" onclick="setFormat('audio')">🎧 Audio (MP3)</div>
+  </div>
+  <h3 style="font-size:0.85rem;">Quality</h3>
+  <div class="quality-row" id="qualityRow"></div>
+  <button class="sheet-cta" onclick="confirmSend()">Send to Telegram</button>
+</div>
+
+<div class="action-bar">
+  <div class="inner">
+    <div class="info">
+      <div class="n" id="barCount">0 videos selected</div>
+      <div class="s">Tap to review format &amp; quality</div>
+    </div>
+    <button class="go-btn" id="goBtn" disabled onclick="openSheet()">Download ⬇</button>
+  </div>
+</div>
+
+<script>
+  let playlistData = [];
+  let selectedIndices = new Set();
+  let currentFilter = 'all';
+  let format = 'video';
+  let quality = '720p';
+
+  const videoQualities = ['360p','480p','720p','1080p'];
+  const audioQualities = ['128kbps','192kbps','320kbps'];
+
+  const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  window.onload = function () {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('data');
+    if (raw) {
+      try {
+        playlistData = JSON.parse(decodeURIComponent(raw));
+        init();
+      } catch (e) { console.error(e); }
+    }
+  };
+
+  function init() {
+    document.getElementById('totalCount').innerText = playlistData.length;
+    document.getElementById('filterRow').style.display = playlistData.length ? 'flex' : 'none';
+    document.getElementById('toolbar').style.display = playlistData.length ? 'flex' : 'none';
+    render();
+  }
+
+  function loadFromInput() {
+    const val = document.getElementById('urlInput').value.trim();
+    if (!val) return;
+    if (tg) {
+      tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
+    } else {
+      alert('This loads inside Telegram — paste the link there to fetch the playlist.');
+    }
+  }
+
+  function toDuration(item) {
+    const s = item.durationSeconds;
+    if (typeof s === 'number') return s;
+    const parts = (item.duration || '0:00').split(':').map(Number);
+    return parts.reduce((a, b) => a * 60 + b, 0);
+  }
+
+  function filteredIndices() {
+    return playlistData.map((_, i) => i).filter(i => {
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'selected') return selectedIndices.has(i);
+      const secs = toDuration(playlistData[i]);
+      if (currentFilter === 'short') return secs < 300;
+      if (currentFilter === 'long') return secs >= 300;
+      return true;
+    });
+  }
+
+  function setFilter(f) {
+    currentFilter = f;
+    document.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.f === f));
+    render();
+  }
+
+  function render() {
+    const list = document.getElementById('list');
+    if (!playlistData.length) return;
+    const idxs = filteredIndices();
+    if (!idxs.length) {
+      list.innerHTML = `<div class="empty"><div class="glyph">🔍</div><b>Nothing here</b>Try a different filter.</div>`;
+    } else {
+      list.innerHTML = idxs.map(i => {
+        const item = playlistData[i];
+        const sel = selectedIndices.has(i);
+        return `
+          <div class="vcard ${sel ? 'selected' : ''}" onclick="toggleSelect(${i})">
+            <div class="thumb">
+              <img src="${item.thumb}" loading="lazy" alt="">
+              <div class="idx">${i + 1}</div>
+              <div class="check">${sel ? '✓' : ''}</div>
+              <div class="dur">${item.duration || ''}</div>
+            </div>
+            <div class="vbody">
+              <div class="vtitle">${item.title}</div>
+              <div class="vmeta"><span>${item.channel || 'Unknown channel'}</span>${item.views ? `<span class="sep"></span><span>${item.views}</span>` : ''}</div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+    updateCounts();
+  }
+
+  function updateCounts() {
+    const n = selectedIndices.size;
+    document.getElementById('selCountLabel').innerText = `${n} selected`;
+    document.getElementById('barCount').innerText = `${n} video${n === 1 ? '' : 's'} selected`;
+    document.getElementById('goBtn').disabled = n === 0;
+  }
+
+  function toggleSelect(i) {
+    selectedIndices.has(i) ? selectedIndices.delete(i) : selectedIndices.add(i);
+    render();
+  }
+
+  function selectAll() {
+    filteredIndices().forEach(i => selectedIndices.add(i));
+    render();
+  }
+
+  function clearAll() {
+    selectedIndices.clear();
+    render();
+  }
+
+  function setFormat(f) {
+    format = f;
+    document.querySelectorAll('.fmt-opt').forEach(el => el.classList.toggle('active', el.dataset.fmt === f));
+    quality = f === 'video' ? '720p' : '192kbps';
+    renderQuality();
+  }
+
+  function renderQuality() {
+    const opts = format === 'video' ? videoQualities : audioQualities;
+    document.getElementById('qualityRow').innerHTML = opts.map(q =>
+      `<div class="q-opt ${q === quality ? 'active' : ''}" onclick="setQuality('${q}')">${q}</div>`
+    ).join('');
+  }
+
+  function setQuality(q) {
+    quality = q;
+    renderQuality();
+  }
+
+  function openSheet() {
+    renderQuality();
+    document.getElementById('sheet').classList.add('open');
+    document.getElementById('sheetOverlay').classList.add('open');
+  }
+
+  function closeSheet() {
+    document.getElementById('sheet').classList.remove('open');
+    document.getElementById('sheetOverlay').classList.remove('open');
+  }
+
+  function confirmSend() {
+    const payload = {
+      action: 'download',
+      format,
+      quality,
+      indices: Array.from(selectedIndices)
+    };
+    if (tg) {
+      tg.sendData(JSON.stringify(payload));
+      tg.close();
+    } else {
+      alert(`Would send ${selectedIndices.size} video(s) as ${format} (${quality})`);
+    }
+  }
+</script>
+</body>
+</html>
