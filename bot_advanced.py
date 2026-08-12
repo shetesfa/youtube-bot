@@ -163,7 +163,7 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction using mobile, tv, & ios clients to bypass bot detection."""
+    """Sub-second metadata extraction using iOS & mweb clients + cookies."""
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -173,8 +173,8 @@ def _get_info(url: str) -> dict:
         "playlistend": 250,
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "mweb", "tv"],
-                "player_skip": ["js"]
+                "player_client": ["ios", "mweb", "android"],
+                "player_skip": ["webpage", "configs"]
             }
         }
     }
@@ -203,7 +203,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "mweb", "tv"]
+                "player_client": ["ios", "mweb", "android"]
             }
         }
     }
@@ -995,7 +995,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Android/iOS/TV Extractor Client Bypass...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Netscape Cookie Authentication & iOS client...")
     app.run_polling()
 
 
