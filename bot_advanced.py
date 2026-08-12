@@ -79,10 +79,10 @@ ITEMS_PER_PAGE = 5
 SESSIONS: dict[int, dict] = {}
 
 QUALITY_FORMATS = {
-    "1080p": "b[height<=1080]/bv*[height<=1080]+ba/b/best",
-    "720p": "b[height<=720]/bv*[height<=720]+ba/b/best",
-    "480p": "b[height<=480]/bv*[height<=480]+ba/b/best",
-    "360p": "b[height<=360]/bv*[height<=360]+ba/b/best",
+    "1080p": "bv*[height<=1080]+ba/b[height<=1080]/bestvideo+bestaudio/best",
+    "720p": "bv*[height<=720]+ba/b[height<=720]/bestvideo+bestaudio/best",
+    "480p": "bv*[height<=480]+ba/b[height<=480]/bestvideo+bestaudio/best",
+    "360p": "bv*[height<=360]+ba/b[height<=360]/bestvideo+bestaudio/best",
     "audio": "ba/b/best",
     "m4a": "ba[ext=m4a]/ba/b/best",
 }
@@ -273,21 +273,29 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
 
     info = None
     last_err = None
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception as e:
-        logger.warning(f"Primary download attempt failed for {url}: {e}. Retrying with fallback options...")
-        last_err = str(e)
-        fallback_opts = dict(ydl_opts)
-        fallback_opts["format"] = "best[ext=mp4]/best" if quality not in ("audio", "m4a") else "ba/b/best"
-        fallback_opts.pop("postprocessors", None)
+
+    format_candidates = [
+        fmt,
+        "bestvideo+bestaudio/best",
+        "best[ext=mp4]/best",
+        "worstvideo+worstaudio/worst",
+        "b/best"
+    ] if quality not in ("audio", "m4a") else [fmt, "ba/b/best", "best"]
+
+    for candidate_fmt in format_candidates:
         try:
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+            current_opts = dict(ydl_opts)
+            current_opts["format"] = candidate_fmt
+            if candidate_fmt != fmt:
+                current_opts.pop("postprocessors", None)
+            with yt_dlp.YoutubeDL(current_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-        except Exception as e2:
-            logger.error(f"Fallback download also failed for {url}: {e2}")
-            last_err = str(e2)
+            if info:
+                last_err = None
+                break
+        except Exception as e:
+            logger.warning(f"Download attempt with format '{candidate_fmt}' failed for {url}: {e}")
+            last_err = str(e)
 
     filepath = None
     if info and info.get("requested_downloads"):
