@@ -382,43 +382,13 @@
   function loadFromInput() {
     const val = document.getElementById('urlInput').value.trim();
     if (!val) return;
-    
-    // Check if it's a playlist URL
-    const listMatch = val.match(/[?&]list=([^&]+)/);
-    if (listMatch && listMatch[1]) {
-      fetchPlaylistFromRSS(listMatch[1]);
-      if (tg) {
-        tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
-      }
-      return;
-    }
 
-    // Check if single video link
-    const vidMatch = val.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
-    if (vidMatch && vidMatch[1]) {
-      const vidId = vidMatch[1];
-      playlistData = [{
-        id: vidId,
-        title: `YouTube Video (${vidId})`,
-        thumb: `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
-        duration: 'N/A',
-        durationSeconds: 0,
-        channel: 'YouTube'
-      }];
-      init();
-      if (tg) {
-        tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
-      }
-      return;
-    }
-
-    // Otherwise, send link or search query to Telegram bot
-    if (tg) {
-      tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
-      alert('🔍 Request sent to Telegram! Telegram is fetching your video/playlist cards.');
-      tg.close();
+    // Direct Telegram Deep Link dispatch
+    const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=SEARCH_${encodeURIComponent(val).slice(0,50)}`;
+    if (tg && tg.openTelegramLink) {
+      tg.openTelegramLink(deepUrl);
     } else {
-      alert('Searching on Telegram… paste this link into your Telegram chat!');
+      window.location.href = deepUrl;
     }
   }
 
@@ -499,7 +469,7 @@
   function setFormat(f) {
     format = f;
     document.querySelectorAll('.fmt-opt').forEach(el => el.classList.toggle('active', el.dataset.fmt === f));
-    quality = f === 'video' ? '720p' : '192kbps';
+    quality = f === 'video' ? '720p' : 'audio';
     renderQuality();
   }
 
@@ -528,6 +498,8 @@
 
   function confirmSend() {
     const selectedList = Array.from(selectedIndices);
+    if (!selectedList.length) return;
+
     const payload = {
       action: 'download',
       format: format,
@@ -535,21 +507,25 @@
       indices: selectedList
     };
 
-    let sent = false;
-    if (tg) {
+    // Attempt 1: Telegram WebApp sendData if inside inline keyboard button
+    if (tg && tg.sendData) {
       try {
         tg.sendData(JSON.stringify(payload));
-        sent = true;
         tg.close();
+        return;
       } catch (e) {
-        console.warn('tg.sendData not available:', e);
+        console.warn('tg.sendData not available in this context:', e);
       }
     }
 
-    if (!sent) {
-      // Direct browser fallback: generate a direct download command link
-      const text = `https://www.youtube.com/watch?v=${playlistData[selectedList[0]]?.id || ''}`;
-      alert(`✅ Selection confirmed! Send your video link (${selectedList.length} items) directly into your Telegram chat to start downloading!`);
+    // Attempt 2: Universal Telegram Deep Link URL (works on EVERY Telegram client & Menu button!)
+    const deepParam = `DL_${quality}_${selectedList.join('_')}`;
+    const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=${deepParam}`;
+
+    if (tg && tg.openTelegramLink) {
+      tg.openTelegramLink(deepUrl);
+    } else {
+      window.location.href = deepUrl;
     }
   }
 </script>

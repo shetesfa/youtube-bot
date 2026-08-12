@@ -2,6 +2,7 @@
 Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 
 Features:
+- Universal Telegram Deep Link URL handler (/start DL_...) for Menu Button & Direct Web App selections
 - Supports 200+ video playlists via ?list=PLAYLIST_ID parameter & RSS XML parser
 - Short URL encoding (never triggers URI Too Long, max 100 chars)
 - Tesfa YouTube Downloader Web App UI with Filter Chips & Format Sheet
@@ -477,6 +478,34 @@ async def _send_photo_album_grid(update: Update, context: ContextTypes.DEFAULT_T
 # ---------- Telegram Handlers ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if context.args:
+        arg = context.args[0]
+        if arg.startswith("DL_"):
+            parts = arg.split("_")
+            quality = parts[1] if len(parts) > 1 else "720p"
+            indices = [int(x) for x in parts[2:] if x.isdigit()]
+            
+            session = SESSIONS.get(user_id)
+            if not session:
+                await update.message.reply_text("⚠️ Session expired — please paste your YouTube link again.")
+                return
+                
+            session["quality"] = quality
+            session["selected"] = set(indices)
+            sub_str = "ON ✅ (Amharic/English)" if session.get("subtitles") else "OFF ❌"
+
+            await update.message.reply_text(
+                f"🚀 **Received selection from Web App!**\n"
+                f"📊 **Selected:** `{len(indices)} videos`\n"
+                f"🎥 **Quality:** `{session['quality']}`\n"
+                f"💬 **Subtitles:** `{sub_str}`\n\n"
+                f"⏳ *Please wait while your request is processed...*",
+                parse_mode="Markdown"
+            )
+            await _run_downloads(update, context, user_id)
+            return
+
     await update.message.reply_text(
         "👋 **Welcome to Tesfa YouTube Downloader Bot!**\n\n"
         "✨ **Features:**\n"
@@ -856,7 +885,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with ?list=PLAYLIST_ID support...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Deep Link URL handler...")
     app.run_polling()
 
 
