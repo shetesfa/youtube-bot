@@ -64,12 +64,12 @@ ITEMS_PER_PAGE = 5
 SESSIONS: dict[int, dict] = {}
 
 QUALITY_FORMATS = {
-    "1080p": "best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "720p": "best[height<=720][ext=mp4]/bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "480p": "best[height<=480][ext=mp4]/bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "360p": "best[height<=360][ext=mp4]/bestvideo[height<=360]+bestaudio/best[height<=360]",
-    "audio": "bestaudio/best",
-    "m4a": "bestaudio[ext=m4a]/bestaudio/best",
+    "1080p": "b[height<=1080]/bv*[height<=1080]+ba/b/best",
+    "720p": "b[height<=720]/bv*[height<=720]+ba/b/best",
+    "480p": "b[height<=480]/bv*[height<=480]+ba/b/best",
+    "360p": "b[height<=360]/bv*[height<=360]+ba/b/best",
+    "audio": "ba/b/best",
+    "m4a": "ba[ext=m4a]/ba/b/best",
 }
 
 def start_health_server():
@@ -994,7 +994,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with android_vr & android Extractor Clients...")
+    logger.info("Tesfa YouTube Downloader Bot starting with latest yt-dlp nightly master & combined format fallback...")
     app.run_polling()
 
 
