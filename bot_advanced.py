@@ -211,7 +211,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "ignoreerrors": "only_download",
+        "ignoreerrors": False,
         "concurrent_fragment_downloads": 5,
         "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
         "extractor_args": {
@@ -298,8 +298,9 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
                 thumb_path = str(tp)
                 break
 
+    title = info.get("title") if info else "Video"
     return {
-        "title": info.get("title", "video") if info else "video",
+        "title": title,
         "path": filepath,
         "thumb_path": thumb_path,
         "duration": info.get("duration") if info else None,
@@ -484,6 +485,16 @@ async def _send_photo_album_grid(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+async def _safe_edit_message(query, text, reply_markup=None):
+    try:
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+    except Exception:
+        try:
+            await query.edit_message_reply_markup(reply_markup=reply_markup)
+        except Exception:
+            pass
+
+
 # ---------- Telegram Handlers ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -498,19 +509,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             urls = []
             session = SESSIONS.get(user_id)
 
-            all_digits = all(x.isdigit() for x in raw_items) if raw_items else False
-            if all_digits and session and session.get("entries"):
-                entries = session["entries"]
-                for x in raw_items:
+            for x in raw_items:
+                if x.isdigit():
                     idx = int(x)
-                    if 0 <= idx < len(entries):
-                        e = entries[idx]
+                    if session and session.get("entries") and 0 <= idx < len(session["entries"]):
+                        e = session["entries"][idx]
                         vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
                         urls.append(vid_url)
-            else:
-                for v in raw_items:
-                    if len(v) >= 5:
-                        urls.append(f"https://www.youtube.com/watch?v={v}")
+                else:
+                    if len(x) >= 3:
+                        urls.append(f"https://www.youtube.com/watch?v={x}")
 
             if not urls and session and session.get("entries"):
                 entries = session["entries"]
@@ -562,7 +570,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await _send_result(update.effective_chat, result)
                 except Exception as e:
                     logger.exception(f"Failed downloading {u}")
-                    await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+                    err_txt = str(e)
+                    if "Sign in" in err_txt or "bot" in err_txt:
+                        await update.message.reply_text(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
+                    else:
+                        await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
                 finally:
                     await update_progress()
 
@@ -759,7 +771,11 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await _send_result(update.effective_chat, result)
             except Exception as e:
                 logger.exception(f"Failed downloading {u}")
-                await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+                err_txt = str(e)
+                if "Sign in" in err_txt or "bot" in err_txt:
+                    await update.message.reply_text(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
+                else:
+                    await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
             finally:
                 await update_progress()
 
@@ -933,7 +949,11 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
             await _send_result(chat, result)
         except Exception as e:
             logger.exception(f"Failed downloading {u}")
-            await chat.send_message(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+            err_txt = str(e)
+            if "Sign in" in err_txt or "bot" in err_txt:
+                await chat.send_message(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
+            else:
+                await chat.send_message(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
         finally:
             await update_progress()
 
@@ -1018,7 +1038,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Robust File Detector & Auto-Select Page...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Deep-Link Index & Video ID Resolver...")
     app.run_polling()
 
 
