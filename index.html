@@ -231,8 +231,8 @@
 </header>
 
 <div class="intake">
-  <input id="urlInput" placeholder="Paste a playlist or video link…" />
-  <button onclick="loadFromInput()">Load</button>
+  <input id="urlInput" placeholder="Paste any playlist or video link…" />
+  <button id="loadBtn" onclick="loadFromInput()">Load</button>
 </div>
 
 <div class="statbar">
@@ -306,6 +306,7 @@
   window.onload = function () {
     const params = new URLSearchParams(window.location.search);
     const ids = params.get('ids');
+    const listId = params.get('list');
     const raw = params.get('data');
     
     if (ids) {
@@ -320,6 +321,8 @@
         };
       });
       init();
+    } else if (listId) {
+      fetchPlaylistFromRSS(listId);
     } else if (raw) {
       try {
         const parsed = JSON.parse(decodeURIComponent(raw));
@@ -337,6 +340,35 @@
     }
   };
 
+  async function fetchPlaylistFromRSS(listId) {
+    document.getElementById('list').innerHTML = `<div class="empty"><div class="glyph">⏳</div><b>Loading videos…</b>Fetching playlist items</div>`;
+    try {
+      const rssUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent('https://www.youtube.com/feeds/videos.xml?playlist_id=' + listId)}`;
+      const res = await fetch(rssUrl);
+      const text = await res.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, 'text/xml');
+      const entries = xmlDoc.querySelectorAll('entry');
+      
+      playlistData = Array.from(entries).map((entry, index) => {
+        const title = entry.querySelector('title')?.textContent || `Video ${index + 1}`;
+        const videoId = entry.querySelector('yt\\:videoId, videoId')?.textContent || '';
+        const author = entry.querySelector('author name')?.textContent || 'YouTube';
+        return {
+          title: title,
+          thumb: videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '',
+          duration: 'N/A',
+          durationSeconds: 0,
+          channel: author
+        };
+      });
+      init();
+    } catch (e) {
+      console.error('RSS fetch error:', e);
+      document.getElementById('list').innerHTML = `<div class="empty"><div class="glyph">⚠️</div><b>Could not load playlist</b>Paste the link on Telegram chat to process.</div>`;
+    }
+  }
+
   function init() {
     document.getElementById('totalCount').innerText = playlistData.length;
     document.getElementById('filterRow').style.display = playlistData.length ? 'flex' : 'none';
@@ -347,11 +379,16 @@
   function loadFromInput() {
     const val = document.getElementById('urlInput').value.trim();
     if (!val) return;
+    
+    // Check if it's a playlist URL
+    const listMatch = val.match(/[?&]list=([^&]+)/);
+    if (listMatch && listMatch[1]) {
+      fetchPlaylistFromRSS(listMatch[1]);
+    }
+    
     if (tg) {
       tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
       tg.close();
-    } else {
-      alert('This loads inside Telegram — paste the link there to fetch the playlist.');
     }
   }
 
