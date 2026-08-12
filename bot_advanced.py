@@ -2,7 +2,7 @@
 Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 
 Features:
-- Compact WebApp JSON URL encoding (fits Telegram 2048 char URL limit)
+- Short URL encoding ?ids=... (never triggers URI Too Long, max 100 chars)
 - Tesfa YouTube Downloader Web App UI with Filter Chips & Format Sheet
 - Sub-Second Ultra Fast Link Response (< 0.5s metadata fetching)
 - Single video & Playlist support with rich metadata & thumbnails
@@ -320,18 +320,10 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🖼️ View Photo Grid (5 Videos)", callback_data="view_grid")
     ])
 
-    # Compact JSON encoding (under 1200 chars for Telegram WebApp URL limit)
-    web_data = []
-    for e in entries[:30]:
-        web_data.append({
-            "t": e.get("title", "Video")[:25],
-            "i": e.get("id"),
-            "d": e.get("duration") or 0,
-            "c": (e.get("uploader") or e.get("channel") or "YouTube")[:15]
-        })
-    
-    encoded_json = urllib.parse.quote(json.dumps(web_data))
-    github_pages_url = f"https://shetesfa.github.io/youtube-bot/tesfa_youtube_downloader.html?data={encoded_json}"
+    # Pass short ID list (max ~90 chars, NEVER triggers URI Too Long)
+    video_ids = [e.get("id") for e in entries[:15] if e.get("id")]
+    ids_str = ",".join(video_ids)
+    github_pages_url = f"https://shetesfa.github.io/youtube-bot/tesfa_youtube_downloader.html?ids={ids_str}"
     buttons.append([
         InlineKeyboardButton("✨ Open Tesfa Web Downloader 📱", web_app=WebAppInfo(url=github_pages_url))
     ])
@@ -854,7 +846,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with 8 parallel streams & compact WebApp JSON...")
+    logger.info("Tesfa YouTube Downloader Bot starting with short URL query strings...")
     app.run_polling()
 
 

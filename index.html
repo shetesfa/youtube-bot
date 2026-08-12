@@ -305,8 +305,22 @@
 
   window.onload = function () {
     const params = new URLSearchParams(window.location.search);
+    const ids = params.get('ids');
     const raw = params.get('data');
-    if (raw) {
+    
+    if (ids) {
+      const idList = ids.split(',');
+      playlistData = idList.map((id, index) => {
+        return {
+          title: `Video ${index + 1}`,
+          thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+          duration: 'N/A',
+          durationSeconds: 0,
+          channel: 'YouTube'
+        };
+      });
+      init();
+    } else if (raw) {
       try {
         const parsed = JSON.parse(decodeURIComponent(raw));
         playlistData = parsed.map(item => {
