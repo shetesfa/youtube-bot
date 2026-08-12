@@ -260,14 +260,16 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
             filepath = str(Path(filepath).with_suffix(".mp3"))
         elif quality == "m4a" and filepath:
             filepath = str(Path(filepath).with_suffix(".m4a"))
-            
-        if filepath and not Path(filepath).exists():
-            title = info.get("title", "") if info else ""
-            for candidate in out_dir.glob("*"):
-                if candidate.is_file() and not candidate.name.endswith((".srt", ".vtt", ".jpg", ".webp", ".png")):
-                    if title and title[:15].lower() in candidate.name.lower():
-                        filepath = str(candidate)
-                        break
+
+    # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
+    if not filepath or not Path(filepath).exists():
+        media_files = [
+            f for f in out_dir.glob("*") 
+            if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mp3", ".m4a")
+        ]
+        if media_files:
+            media_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            filepath = str(media_files[0])
 
     downloaded_sub_file = None
     sub_lang_used = "am"
@@ -374,8 +376,9 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
     ])
 
     sel_count = len(selected)
+    btn_label = f"🚀 Download Selected ({sel_count} Videos)" if sel_count > 0 else "🚀 Download Current Page"
     buttons.append([
-        InlineKeyboardButton(f"🚀 Download Selected ({sel_count} Videos)", callback_data="pick_done")
+        InlineKeyboardButton(btn_label, callback_data="pick_done")
     ])
 
     return InlineKeyboardMarkup(buttons)
@@ -829,8 +832,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             selected.clear()
         elif data == "pick_done":
             if not selected:
-                await query.answer("Please select at least one video to proceed!", show_alert=True)
-                return
+                # Automatically select current page videos if user clicks Download Selected without selecting
+                start_idx = page * ITEMS_PER_PAGE
+                end_idx = min(start_idx + ITEMS_PER_PAGE, len(entries))
+                selected.update(range(start_idx, end_idx))
+            
             await _safe_edit_message(
                 query,
                 f"✅ **{len(selected)} video(s) selected!**\n\n"
@@ -1012,7 +1018,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Multi-Client Rotation & Graceful Bot Error Handling...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Robust File Detector & Auto-Select Page...")
     app.run_polling()
 
 
