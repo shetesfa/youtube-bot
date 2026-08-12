@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YouTube Playlist Gallery</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -24,7 +25,7 @@
     body {
       background-color: var(--bg);
       color: var(--text);
-      padding: 20px;
+      padding: 16px;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -33,10 +34,10 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
     h1 {
-      font-size: 1.4rem;
+      font-size: 1.2rem;
       background: linear-gradient(135deg, #818cf8, #c084fc);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -44,41 +45,38 @@
     .badge {
       background: rgba(99, 102, 241, 0.2);
       color: #818cf8;
-      padding: 4px 12px;
+      padding: 4px 10px;
       border-radius: 20px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       font-weight: 600;
     }
     .controls-bar {
       display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
+      gap: 8px;
+      margin-bottom: 16px;
       flex-wrap: wrap;
     }
     .btn {
       background: var(--card-bg);
       color: var(--text);
       border: 1px solid rgba(255, 255, 255, 0.1);
-      padding: 10px 16px;
-      border-radius: 12px;
+      padding: 8px 14px;
+      border-radius: 10px;
       font-weight: 600;
+      font-size: 0.85rem;
       cursor: pointer;
       transition: all 0.2s ease;
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
     .btn:hover {
       background: #334155;
-      transform: translateY(-2px);
     }
     .btn-primary {
       background: var(--accent);
       color: white;
       border: none;
-    }
-    .btn-primary:hover {
-      background: var(--accent-hover);
     }
     .carousel-container {
       overflow-x: auto;
@@ -86,30 +84,19 @@
       scrollbar-width: thin;
       scrollbar-color: var(--accent) var(--card-bg);
     }
-    .carousel-container::-webkit-scrollbar {
-      height: 8px;
-    }
-    .carousel-container::-webkit-scrollbar-thumb {
-      background: var(--accent);
-      border-radius: 4px;
-    }
     .grid-track {
       display: flex;
-      gap: 16px;
+      gap: 14px;
     }
     .video-card {
-      flex: 0 0 280px;
+      flex: 0 0 240px;
       background: var(--card-bg);
-      border-radius: 16px;
+      border-radius: 14px;
       overflow: hidden;
       border: 2px solid transparent;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: all 0.2s ease;
       position: relative;
-    }
-    .video-card:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 12px 24px -10px rgba(99, 102, 241, 0.3);
     }
     .video-card.selected {
       border-color: var(--success);
@@ -118,7 +105,7 @@
     .thumb-wrapper {
       position: relative;
       width: 100%;
-      height: 158px;
+      height: 135px;
       background: #000;
     }
     .thumb-wrapper img {
@@ -128,58 +115,51 @@
     }
     .duration-tag {
       position: absolute;
-      bottom: 8px;
-      right: 8px;
-      background: rgba(0, 0, 0, 0.8);
+      bottom: 6px;
+      right: 6px;
+      background: rgba(0, 0, 0, 0.85);
       color: #fff;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.7rem;
       font-weight: 600;
     }
     .check-badge {
       position: absolute;
-      top: 10px;
-      left: 10px;
-      width: 28px;
-      height: 28px;
+      top: 8px;
+      left: 8px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       background: rgba(0,0,0,0.6);
       border: 2px solid white;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 14px;
+      font-size: 12px;
       color: white;
-      transition: all 0.2s ease;
     }
     .video-card.selected .check-badge {
       background: var(--success);
       border-color: var(--success);
     }
     .card-body {
-      padding: 12px 14px;
+      padding: 10px 12px;
     }
     .card-title {
-      font-size: 0.95rem;
+      font-size: 0.85rem;
       font-weight: 600;
       line-height: 1.3;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       display: -webkit-box;
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
-    .card-meta {
-      font-size: 0.8rem;
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
       color: var(--text-muted);
-    }
-    footer {
-      margin-top: auto;
-      padding-top: 20px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
     }
   </style>
 </head>
@@ -192,31 +172,41 @@
   <div class="controls-bar">
     <button class="btn btn-primary" onclick="selectAll()">⚡ Select All</button>
     <button class="btn" onclick="clearAll()">❌ Clear</button>
-    <button class="btn btn-primary" style="background:#22c55e;" onclick="submitSelection()">🚀 Download Selected (<span id="selCount">0</span>)</button>
+    <button class="btn btn-primary" style="background:#22c55e;" onclick="submitSelection()">🚀 Download (<span id="selCount">0</span>)</button>
   </div>
 
   <div class="carousel-container">
     <div class="grid-track" id="gridTrack">
-      <!-- Dynamic Video Cards inserted by JS -->
+      <div class="empty-state">Send a playlist link on Telegram to view your video cards here!</div>
     </div>
   </div>
-
-  <footer>
-    <span style="font-size:0.85rem; color:var(--text-muted);">Side-scroll horizontally to browse cards</span>
-  </footer>
 
   <script>
     let playlistData = [];
     let selectedIndices = new Set();
 
-    function loadData(data) {
-      playlistData = data;
-      document.getElementById('totalCount').innerText = `${playlistData.length} Videos`;
-      render();
+    if (window.Telegram && window.Telegram.WebApp) {
+      window.Telegram.WebApp.ready();
+      window.Telegram.WebApp.expand();
     }
+
+    window.onload = function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const rawData = urlParams.get('data');
+      if (rawData) {
+        try {
+          playlistData = JSON.parse(decodeURIComponent(rawData));
+          document.getElementById('totalCount').innerText = `${playlistData.length} Videos`;
+          render();
+        } catch(e) {
+          console.error(e);
+        }
+      }
+    };
 
     function render() {
       const track = document.getElementById('gridTrack');
+      if (!playlistData.length) return;
       track.innerHTML = '';
       playlistData.forEach((item, index) => {
         const isSel = selectedIndices.has(index);
@@ -231,7 +221,6 @@
           </div>
           <div class="card-body">
             <div class="card-title">${index + 1}. ${item.title}</div>
-            <div class="card-meta">${item.uploader || 'YouTube'}</div>
           </div>
         `;
         track.appendChild(card);
@@ -260,13 +249,14 @@
 
     function submitSelection() {
       if (selectedIndices.size === 0) {
-        alert('Please select at least one video to download!');
+        alert('Please select at least one video!');
         return;
       }
       if (window.Telegram && window.Telegram.WebApp) {
         window.Telegram.WebApp.sendData(JSON.stringify(Array.from(selectedIndices)));
+        window.Telegram.WebApp.close();
       } else {
-        alert(`Selected ${selectedIndices.size} videos! Close web view and return to Telegram.`);
+        alert(`Selected ${selectedIndices.size} videos!`);
       }
     }
   </script>
