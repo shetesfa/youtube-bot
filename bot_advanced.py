@@ -10,6 +10,7 @@ Features:
 - Advanced Anti-Bot Extractor Clients (tv, android_vr, mweb, android, ios, web)
 - Smart Subtitles: Amharic (am) for Amharic videos & English (en) for World videos
 - Subtitles soft-embedded directly into Video streams in < 0.5s
+- Integrated Web Server for Render Health Check & Web Gallery Hosting
 """
 
 import os
@@ -17,11 +18,13 @@ import re
 import math
 import logging
 import asyncio
+import threading
 import subprocess
 from pathlib import Path
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from PIL import Image
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, WebAppInfo
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -62,6 +65,30 @@ QUALITY_FORMATS = {
     "audio": "bestaudio/best",
     "m4a": "bestaudio[ext=m4a]/bestaudio/best",
 }
+
+def start_health_server():
+    """Runs a lightweight HTTP server for Render health checks & web gallery hosting."""
+    port = int(os.environ.get("PORT", 8080))
+    class HealthHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path in ("/", "/health"):
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h1>YouTube Bot & Web Gallery Active 24/7!</h1>")
+            else:
+                super().do_GET()
+
+        def log_message(self, format, *args):
+            pass
+
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"Health check & Web Gallery server started on port {port}")
+    except Exception as e:
+        logger.warning(f"Could not start health server on port {port}: {e}")
 
 def format_duration(seconds) -> str:
     if not seconds:
@@ -279,14 +306,19 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
     page_entries = entries[start_idx:end_idx]
 
     buttons = []
-    # TOP ACTION: Download Full Playlist in 1 click!
     buttons.append([
         InlineKeyboardButton(f"⚡ DOWNLOAD ALL ({len(entries)} Videos in Playlist)", callback_data="pick_all_go")
     ])
 
-    # Visual 5-Photo Grid Button
     buttons.append([
         InlineKeyboardButton("🖼️ View Photo Grid (5 Videos)", callback_data="view_grid")
+    ])
+
+    # Dynamic Web Gallery Link hosted on Render
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://my-youtube-bot-8672.onrender.com")
+    web_gallery_url = f"{render_url}/web_gallery.html"
+    buttons.append([
+        InlineKeyboardButton("🌐 Open Side-Scroll Web Gallery", web_app=WebAppInfo(url=web_gallery_url))
     ])
 
     for offset, e in enumerate(page_entries):
@@ -433,7 +465,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "✨ **Features:**\n"
         "• Single Videos & Full Playlists (1-Click Download All)\n"
         "• 5-Photo Album Grid: See 5 video thumbnails side-by-side in chat!\n"
-        "• Interactive Side-Scrolling Playlist Viewer\n"
+        "• Interactive Side-Scrolling Playlist Viewer & Web App Gallery\n"
         "• Native Aspect Ratio Cover Art Thumbnail Previews\n"
         "• High Speed 5-Parallel Downloads & Single-Pass Subtitle Extraction\n"
         "• Quality Options: 1080p / 720p / 480p / 360p / MP3 / M4A\n\n"
@@ -477,7 +509,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_chat.send_message(
             f"📋 **Playlist Found:** {playlist_title}\n"
             f"📊 **Total Videos:** {len(entries)}\n\n"
-            f"👇 *Tap '⚡ DOWNLOAD ALL' to download everything, or tap '🖼️ View Photo Grid' to see video thumbnails:*",
+            f"👇 *Tap '⚡ DOWNLOAD ALL' to download everything, or tap '🖼️ View Photo Grid' / '🌐 Open Web Gallery':*",
             parse_mode="Markdown",
             reply_markup=_get_playlist_keyboard(user_id)
         )
@@ -756,12 +788,13 @@ def main() -> None:
     if not BOT_TOKEN or BOT_TOKEN == "PASTE_YOUR_TOKEN_HERE":
         raise SystemExit("Set the BOT_TOKEN environment variable or edit bot_advanced.py with your token.")
 
+    start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Ultra YouTube Downloader Bot starting with 5-Photo Album Grid & Web Gallery...")
+    logger.info("Ultra YouTube Downloader Bot starting with Health Server & Web Gallery on Render...")
     app.run_polling()
 
 
