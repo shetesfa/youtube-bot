@@ -227,12 +227,12 @@
 <header class="top">
   <div class="eyebrow"><span class="dot"></span>TESFA · CONNECTED TO TELEGRAM</div>
   <h1 class="brand">Tesfa <em>YouTube</em> Downloader</h1>
-  <div class="sub">Pick your videos, choose a format, and Tesfa will send them straight to this chat.</div>
+  <div class="sub">Search videos or paste links below, pick your format, and send straight to Telegram.</div>
 </header>
 
 <div class="intake">
-  <input id="urlInput" placeholder="Paste any playlist or video link…" />
-  <button id="loadBtn" onclick="loadFromInput()">Load</button>
+  <input id="urlInput" placeholder="Search YouTube or paste video/playlist link…" onkeydown="if(event.key==='Enter')loadFromInput()" />
+  <button id="loadBtn" onclick="loadFromInput()">Search</button>
 </div>
 
 <div class="statbar">
@@ -255,8 +255,8 @@
 <div class="list" id="list">
   <div class="empty">
     <div class="glyph">☕️🎬</div>
-    <b>No videos yet</b>
-    Send a playlist or video link on Telegram, or paste one above, to see it here.
+    <b>Search or paste a YouTube link</b>
+    Type any video name or paste a playlist link above to load your cards.
   </div>
 </div>
 
@@ -313,6 +313,7 @@
       const idList = ids.split(',');
       playlistData = idList.map((id, index) => {
         return {
+          id: id,
           title: `Video ${index + 1}`,
           thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
           duration: 'N/A',
@@ -328,6 +329,7 @@
         const parsed = JSON.parse(decodeURIComponent(raw));
         playlistData = parsed.map(item => {
           return {
+            id: item.i || '',
             title: item.t || item.title || 'Video',
             thumb: item.i ? `https://i.ytimg.com/vi/${item.i}/hqdefault.jpg` : (item.thumb || ''),
             duration: typeof item.d === 'number' ? formatSecs(item.d) : (item.duration || 'N/A'),
@@ -355,6 +357,7 @@
         const videoId = entry.querySelector('yt\\:videoId, videoId')?.textContent || '';
         const author = entry.querySelector('author name')?.textContent || 'YouTube';
         return {
+          id: videoId,
           title: title,
           thumb: videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '',
           duration: 'N/A',
@@ -384,11 +387,38 @@
     const listMatch = val.match(/[?&]list=([^&]+)/);
     if (listMatch && listMatch[1]) {
       fetchPlaylistFromRSS(listMatch[1]);
+      if (tg) {
+        tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
+      }
+      return;
     }
-    
+
+    // Check if single video link
+    const vidMatch = val.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/);
+    if (vidMatch && vidMatch[1]) {
+      const vidId = vidMatch[1];
+      playlistData = [{
+        id: vidId,
+        title: `YouTube Video (${vidId})`,
+        thumb: `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+        duration: 'N/A',
+        durationSeconds: 0,
+        channel: 'YouTube'
+      }];
+      init();
+      if (tg) {
+        tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
+      }
+      return;
+    }
+
+    // Otherwise, send link or search query to Telegram bot
     if (tg) {
       tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
+      alert('🔍 Request sent to Telegram! Telegram is fetching your video/playlist cards.');
       tg.close();
+    } else {
+      alert('Searching on Telegram… paste this link into your Telegram chat!');
     }
   }
 
@@ -497,17 +527,29 @@
   }
 
   function confirmSend() {
+    const selectedList = Array.from(selectedIndices);
     const payload = {
       action: 'download',
       format: format,
       quality: quality,
-      indices: Array.from(selectedIndices)
+      indices: selectedList
     };
+
+    let sent = false;
     if (tg) {
-      tg.sendData(JSON.stringify(payload));
-      tg.close();
-    } else {
-      alert(`Would send ${selectedIndices.size} video(s) as ${format} (${quality})`);
+      try {
+        tg.sendData(JSON.stringify(payload));
+        sent = true;
+        tg.close();
+      } catch (e) {
+        console.warn('tg.sendData not available:', e);
+      }
+    }
+
+    if (!sent) {
+      // Direct browser fallback: generate a direct download command link
+      const text = `https://www.youtube.com/watch?v=${playlistData[selectedList[0]]?.id || ''}`;
+      alert(`✅ Selection confirmed! Send your video link (${selectedList.length} items) directly into your Telegram chat to start downloading!`);
     }
   }
 </script>
