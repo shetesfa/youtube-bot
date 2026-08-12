@@ -508,6 +508,22 @@
     const deepParam = `DL_${quality}_${idParam}`;
     const deepUrl = `https://t.me/myyoutubedownloader12_bot?start=${deepParam}`;
 
+    const payload = {
+      action: 'download',
+      format: format,
+      quality: quality,
+      indices: selectedList,
+      video_ids: videoIds
+    };
+
+    // Send via sendData (for Inline Keyboard WebApps)
+    if (tg && tg.sendData) {
+      try {
+        tg.sendData(JSON.stringify(payload));
+      } catch (e) { console.warn(e); }
+    }
+
+    // Send via deepLink (for Menu Buttons & Direct Web Views)
     if (tg && tg.openTelegramLink) {
       tg.openTelegramLink(deepUrl);
     } else {
