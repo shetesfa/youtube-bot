@@ -296,12 +296,28 @@
   const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
   if (tg) { tg.ready(); tg.expand(); }
 
+  function formatSecs(s) {
+    if (!s) return 'N/A';
+    const m = Math.floor(s / 60);
+    const secs = s % 60;
+    return `${m}:${secs < 10 ? '0' : ''}${secs}`;
+  }
+
   window.onload = function () {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('data');
     if (raw) {
       try {
-        playlistData = JSON.parse(decodeURIComponent(raw));
+        const parsed = JSON.parse(decodeURIComponent(raw));
+        playlistData = parsed.map(item => {
+          return {
+            title: item.t || item.title || 'Video',
+            thumb: item.i ? `https://i.ytimg.com/vi/${item.i}/hqdefault.jpg` : (item.thumb || ''),
+            duration: typeof item.d === 'number' ? formatSecs(item.d) : (item.duration || 'N/A'),
+            durationSeconds: item.d || item.durationSeconds || 0,
+            channel: item.c || item.channel || 'YouTube'
+          };
+        });
         init();
       } catch (e) { console.error(e); }
     }
@@ -319,6 +335,7 @@
     if (!val) return;
     if (tg) {
       tg.sendData(JSON.stringify({ action: 'fetch_playlist', url: val }));
+      tg.close();
     } else {
       alert('This loads inside Telegram — paste the link there to fetch the playlist.');
     }
@@ -368,7 +385,7 @@
             </div>
             <div class="vbody">
               <div class="vtitle">${item.title}</div>
-              <div class="vmeta"><span>${item.channel || 'Unknown channel'}</span>${item.views ? `<span class="sep"></span><span>${item.views}</span>` : ''}</div>
+              <div class="vmeta"><span>${item.channel || 'YouTube'}</span>${item.views ? `<span class="sep"></span><span>${item.views}</span>` : ''}</div>
             </div>
           </div>`;
       }).join('');
@@ -431,8 +448,8 @@
   function confirmSend() {
     const payload = {
       action: 'download',
-      format,
-      quality,
+      format: format,
+      quality: quality,
       indices: Array.from(selectedIndices)
     };
     if (tg) {

@@ -2,14 +2,14 @@
 Ultra-Advanced Personal-Use YouTube Downloader Telegram Bot.
 
 Features:
-- Seamless Integration with Tesfa YouTube Downloader Web App UI
-- WebApp status update handler (receives selections & downloads automatically)
+- Compact WebApp JSON URL encoding (fits Telegram 2048 char URL limit)
+- Tesfa YouTube Downloader Web App UI with Filter Chips & Format Sheet
 - Sub-Second Ultra Fast Link Response (< 0.5s metadata fetching)
 - Single video & Playlist support with rich metadata & thumbnails
 - 5-Photo Album Grid Carousel: See 5 video thumbnails side-by-side in chat!
 - Interactive Side-Scrolling Playlist Viewer & Web App Gallery (GitHub Pages CDN)
 - Perfect Native Aspect Ratio Cover Art Thumbnail previews on sent Telegram videos
-- Single-Pass Ultra Fast Downloads (up to 5 parallel downloads)
+- Single-Pass Ultra Fast Downloads (up to 8 parallel downloads)
 - Smart Subtitles: Amharic (am) for Amharic videos & English (en) for World videos
 """
 
@@ -54,7 +54,7 @@ DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
-MAX_PARALLEL_DOWNLOADS = 5
+MAX_PARALLEL_DOWNLOADS = 8
 ITEMS_PER_PAGE = 5
 
 SESSIONS: dict[int, dict] = {}
@@ -69,7 +69,7 @@ QUALITY_FORMATS = {
 }
 
 def start_health_server():
-    """Runs a daemon HTTP server for Render health checks."""
+    """Runs a daemon HTTP server for Render / Railway health checks."""
     port = int(os.environ.get("PORT", 8080))
     class HealthHandler(SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -320,15 +320,14 @@ def _get_playlist_keyboard(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🖼️ View Photo Grid (5 Videos)", callback_data="view_grid")
     ])
 
-    # Encode playlist entries for Tesfa YouTube Downloader Web App
+    # Compact JSON encoding (under 1200 chars for Telegram WebApp URL limit)
     web_data = []
-    for e in entries[:40]:
+    for e in entries[:30]:
         web_data.append({
-            "title": e.get("title", "Video")[:40],
-            "thumb": get_thumbnail_url(e),
-            "duration": format_duration(e.get("duration")),
-            "durationSeconds": e.get("duration") or 0,
-            "channel": e.get("uploader") or e.get("channel") or "YouTube"
+            "t": e.get("title", "Video")[:25],
+            "i": e.get("id"),
+            "d": e.get("duration") or 0,
+            "c": (e.get("uploader") or e.get("channel") or "YouTube")[:15]
         })
     
     encoded_json = urllib.parse.quote(json.dumps(web_data))
@@ -485,7 +484,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• 5-Photo Album Grid: See 5 video thumbnails side-by-side in chat!\n"
         "• Instant GitHub Pages Side-Scrolling Web Gallery\n"
         "• Native Aspect Ratio Cover Art Thumbnail Previews\n"
-        "• High Speed 5-Parallel Downloads & Single-Pass Subtitle Extraction\n"
+        "• High Speed 8-Parallel Downloads & Single-Pass Subtitle Extraction\n"
         "• Quality Options: 1080p / 720p / 480p / 360p / MP3 / M4A\n\n"
         "📌 *Send me any YouTube video or playlist link to start!*",
         parse_mode="Markdown"
@@ -578,14 +577,14 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"Web App Data received from user {user_id}: {raw_data}")
     try:
         data = json.loads(raw_data)
-        session = SESSIONS.get(user_id)
-        if not session:
-            await update.message.reply_text("⚠️ Session expired — please paste your playlist link again.")
-            return
-
         if data.get("action") == "fetch_playlist" and data.get("url"):
             update.message.text = data["url"]
             await handle_message(update, context)
+            return
+
+        session = SESSIONS.get(user_id)
+        if not session:
+            await update.message.reply_text("⚠️ Session expired — please paste your playlist link again.")
             return
 
         indices = data.get("indices") or data.get("selected") or []
@@ -855,7 +854,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Web App Data Handlers...")
+    logger.info("Tesfa YouTube Downloader Bot starting with 8 parallel streams & compact WebApp JSON...")
     app.run_polling()
 
 
