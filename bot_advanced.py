@@ -55,6 +55,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947851594:AAF4AC_vVSxxYMChCcysPULPafaC
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
+COOKIE_FILE = Path("cookies.txt")
+
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
 ITEMS_PER_PAGE = 5
@@ -161,7 +163,7 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction using lightweight mweb & android clients."""
+    """Sub-second metadata extraction using mobile, tv, & ios clients to bypass bot detection."""
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -171,12 +173,16 @@ def _get_info(url: str) -> dict:
         "playlistend": 250,
         "extractor_args": {
             "youtube": {
-                "player_client": ["mweb", "android", "ios"]
+                "player_client": ["android", "ios", "mweb", "tv"],
+                "player_skip": ["js"]
             }
         }
     }
+    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+        ydl_opts["cookiefile"] = str(COOKIE_FILE)
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
 
@@ -197,10 +203,12 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
         "extractor_args": {
             "youtube": {
-                "player_client": ["mweb", "android", "tv", "ios"]
+                "player_client": ["android", "ios", "mweb", "tv"]
             }
         }
     }
+    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+        ydl_opts["cookiefile"] = str(COOKIE_FILE)
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
@@ -987,7 +995,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Revoked Fresh Token...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Android/iOS/TV Extractor Client Bypass...")
     app.run_polling()
 
 
