@@ -180,9 +180,9 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 def _get_info(url: str) -> dict:
     """Sub-second metadata extraction with multi-client rotation."""
     clients = [
-        ["android_vr", "android", "ios", "mweb"],
-        ["ios", "mweb", "android"],
-        ["tv", "android"]
+        ["android", "android_vr", "tv_embedded"],
+        ["android_vr", "android"],
+        ["mweb", "ios"]
     ]
     last_err = None
     for client_list in clients:
@@ -238,7 +238,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         },
         "extractor_args": {
             "youtube": {
-                "player_client": ["tv", "android_vr", "web_creator", "mweb", "ios", "android"]
+                "player_client": ["android", "android_vr", "tv_embedded"]
             }
         }
     }
