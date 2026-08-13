@@ -57,14 +57,20 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 COOKIE_FILE = Path("cookies.txt")
 
-# Auto-load cookies from Render Environment variable if present
-env_cookies = os.environ.get("YOUTUBE_COOKIES")
-if env_cookies:
+# Auto-detect cookie text from ANY Environment Variable in Render
+found_cookie_text = None
+for k, v in os.environ.items():
+    if v and ("# Netscape HTTP Cookie File" in v or "LOGIN_INFO" in v or ".youtube.com" in v):
+        found_cookie_text = v
+        logger.info(f"Auto-detected YouTube cookies from environment variable '{k}'!")
+        break
+
+if found_cookie_text:
     try:
-        COOKIE_FILE.write_text(env_cookies.strip(), encoding="utf-8")
-        logger.info("Loaded YOUTUBE_COOKIES from environment variable!")
+        COOKIE_FILE.write_text(found_cookie_text.strip(), encoding="utf-8")
+        logger.info("Successfully wrote cookies.txt from environment variable!")
     except Exception as e:
-        logger.warning(f"Could not write YOUTUBE_COOKIES: {e}")
+        logger.warning(f"Could not write COOKIE_FILE: {e}")
 
 PROXY_URL = os.environ.get("YTDLP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
 if PROXY_URL and ("host:port" in PROXY_URL or "user:pass" in PROXY_URL or "example" in PROXY_URL):
@@ -1099,7 +1105,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Proxy Safety Validator...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Auto-Cookie Environment Detector...")
     app.run_polling()
 
 
