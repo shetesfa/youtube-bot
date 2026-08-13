@@ -79,10 +79,10 @@ ITEMS_PER_PAGE = 5
 SESSIONS: dict[int, dict] = {}
 
 QUALITY_FORMATS = {
-    "1080p": "bv*[height<=1080]+ba/b[height<=1080]/bestvideo+bestaudio/best",
-    "720p": "bv*[height<=720]+ba/b[height<=720]/bestvideo+bestaudio/best",
-    "480p": "bv*[height<=480]+ba/b[height<=480]/bestvideo+bestaudio/best",
-    "360p": "bv*[height<=360]+ba/b[height<=360]/bestvideo+bestaudio/best",
+    "1080p": "b[height<=1080]/bv*[height<=1080]+ba/b/best",
+    "720p": "b[height<=720]/bv*[height<=720]+ba/b/best",
+    "480p": "b[height<=480]/bv*[height<=480]+ba/b/best",
+    "360p": "b[height<=360]/bv*[height<=360]+ba/b/best",
     "audio": "ba/b/best",
     "m4a": "ba[ext=m4a]/ba/b/best",
 }
@@ -273,10 +273,10 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
 
     format_candidates = [
         fmt,
-        "bestvideo+bestaudio/best",
+        "b[height<=720]/b/best",
         "best[ext=mp4]/best",
-        "worstvideo+worstaudio/worst",
-        "b/best"
+        "b/best",
+        "best"
     ] if quality not in ("audio", "m4a") else [fmt, "ba/b/best", "best"]
 
     # Stage 1: Try high-speed multi-client without forcing cookie skipping
