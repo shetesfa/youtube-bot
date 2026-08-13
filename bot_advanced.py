@@ -238,7 +238,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android_vr", "web_creator", "android"]
+                "player_client": ["tv", "android_vr", "web_creator", "mweb", "ios", "android"]
             }
         }
     }
