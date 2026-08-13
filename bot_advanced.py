@@ -37,23 +37,13 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import shutil
 import yt_dlp
 
-FFMPEG_PATH = None
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
-    pass
-
-if not FFMPEG_PATH or not Path(FFMPEG_PATH).exists():
-    try:
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
-    except Exception:
-        pass
-    FFMPEG_PATH = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    FFMPEG_PATH = None
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -66,21 +56,17 @@ DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 COOKIE_FILE = Path("cookies.txt")
-# Always (re)write cookies.txt from the env var on every startup, so an
-# updated YOUTUBE_COOKIES value takes effect on redeploy instead of being
-# ignored because an old cookies.txt already exists on disk.
-if os.environ.get("YOUTUBE_COOKIES"):
-    try:
-        COOKIE_FILE.write_text(os.environ["YOUTUBE_COOKIES"])
-        logger.info("Loaded YOUTUBE_COOKIES into cookies.txt")
-    except Exception as e:
-        logger.warning(f"Could not write YOUTUBE_COOKIES to cookies.txt: {e}")
 
-# Optional residential/rotating proxy, e.g. http://user:pass@host:port
-# Set this in Render -> Environment as YTDLP_PROXY. Cloud provider IPs
-# (Render, AWS, etc.) are flagged by YouTube far more aggressively than
-# residential IPs, so a proxy fixes cases cookies alone can't.
-YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "").strip() or None
+# Auto-load cookies from Render Environment variable if present
+env_cookies = os.environ.get("YOUTUBE_COOKIES")
+if env_cookies:
+    try:
+        COOKIE_FILE.write_text(env_cookies.strip(), encoding="utf-8")
+        logger.info("Loaded YOUTUBE_COOKIES from environment variable!")
+    except Exception as e:
+        logger.warning(f"Could not write YOUTUBE_COOKIES: {e}")
+
+PROXY_URL = os.environ.get("YTDLP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
@@ -188,17 +174,12 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction with multi-client rotation.
-
-    Cookies and the optional proxy are attached from the very first
-    attempt (not just as a last-resort fallback), and tv/mweb clients are
-    tried first since they currently need PO tokens less often than the
-    android clients.
-    """
+    """Sub-second metadata extraction with multi-client rotation."""
     clients = [
-        ["tv_embedded", "web_safari", "mweb"],
-        ["android_vr", "android"],
-        ["mweb", "ios"],
+        ["tv_embedded", "android", "ios"],
+        ["android_vr", "android", "ios", "mweb"],
+        ["ios", "mweb", "android"],
+        ["tv", "android"]
     ]
     last_err = None
     for client_list in clients:
@@ -218,8 +199,8 @@ def _get_info(url: str) -> dict:
             }
             if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
                 ydl_opts["cookiefile"] = str(COOKIE_FILE)
-            if YTDLP_PROXY:
-                ydl_opts["proxy"] = YTDLP_PROXY
+            if PROXY_URL:
+                ydl_opts["proxy"] = PROXY_URL
             if FFMPEG_PATH:
                 ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
@@ -237,173 +218,128 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
     outtmpl = str(out_dir / "%(title)s.%(ext)s")
     fmt = QUALITY_FORMATS.get(quality, QUALITY_FORMATS["720p"])
     
-    ydl_opts = {
-        "format": fmt,
-        "outtmpl": outtmpl,
-        "writethumbnail": True,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "ignoreerrors": False,
-        "nocheckcertificate": True,
-        "geo_bypass": True,
-        "concurrent_fragment_downloads": 5,
-        "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["tv_embedded", "web_safari", "mweb"]
-            }
-        }
-    }
-    if FFMPEG_PATH:
-        ydl_opts["ffmpeg_location"] = FFMPEG_PATH
-    # Cookies and proxy are attached from the FIRST attempt now, not only
-    # as a last-resort fallback after everything else already failed.
-    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-        ydl_opts["cookiefile"] = str(COOKIE_FILE)
-    if YTDLP_PROXY:
-        ydl_opts["proxy"] = YTDLP_PROXY
+    client_configs = [
+        ["tv_embedded", "android", "ios"],
+        ["android_vr", "android", "ios", "mweb"],
+        ["ios", "mweb", "android"],
+        ["tv", "android"]
+    ]
 
-    if subtitles:
-        ydl_opts.update({
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": ["am", "en", "am.*", "en.*"],
-            "subtitlesformat": "srt",
-        })
-    
-    if quality == "audio":
-        ydl_opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            },
-            {"key": "FFmpegMetadata"},
-        ]
-    elif quality == "m4a":
-        ydl_opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
-            {"key": "FFmpegMetadata"},
-        ]
+    last_exception = None
 
-    info = None
-    last_err = None
-
-    format_candidates = [
-        fmt,
-        "b[height<=720]/b/best",
-        "best[ext=mp4]/best",
-        "b/best",
-        "best"
-    ] if quality not in ("audio", "m4a") else [fmt, "ba/b/best", "best"]
-
-    # Stage 1: high-speed attempt, tv/mweb clients, cookies + proxy already attached above
-    for candidate_fmt in format_candidates:
+    for client_list in client_configs:
         try:
-            current_opts = dict(ydl_opts)
-            current_opts["format"] = candidate_fmt
-            if candidate_fmt != fmt:
-                current_opts.pop("postprocessors", None)
-            with yt_dlp.YoutubeDL(current_opts) as ydl:
+            ydl_opts = {
+                "format": fmt,
+                "outtmpl": outtmpl,
+                "writethumbnail": True,
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "ignoreerrors": False,
+                "concurrent_fragment_downloads": 5,
+                "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": client_list
+                    }
+                }
+            }
+            if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+                ydl_opts["cookiefile"] = str(COOKIE_FILE)
+            if PROXY_URL:
+                ydl_opts["proxy"] = PROXY_URL
+            if FFMPEG_PATH:
+                ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+
+            if subtitles:
+                ydl_opts.update({
+                    "writesubtitles": True,
+                    "writeautomaticsub": True,
+                    "subtitleslangs": ["am", "en", "am.*", "en.*"],
+                    "subtitlesformat": "srt",
+                })
+            
+            if quality == "audio":
+                ydl_opts["postprocessors"] = [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    },
+                    {"key": "FFmpegMetadata"},
+                ]
+            elif quality == "m4a":
+                ydl_opts["postprocessors"] = [
+                    {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
+                    {"key": "FFmpegMetadata"},
+                ]
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-            if info:
-                last_err = None
-                break
-        except Exception as e:
-            logger.warning(f"Stage 1 download attempt with format '{candidate_fmt}' failed for {url}: {e}")
-            last_err = str(e)
+                filepath = None
+                if info and info.get("requested_downloads"):
+                    filepath = info["requested_downloads"][0].get("filepath")
+                if not filepath and info:
+                    filepath = ydl.prepare_filename(info)
+                    
+                if quality == "audio" and filepath:
+                    filepath = str(Path(filepath).with_suffix(".mp3"))
+                elif quality == "m4a" and filepath:
+                    filepath = str(Path(filepath).with_suffix(".m4a"))
 
-    # Stage 2: retry with a different client combo (android family) in case
-    # tv/mweb got challenged but android clients still work for this video
-    if not info:
-        logger.info(f"Stage 1 failed. Retrying with android client set for {url}...")
-        cookie_opts = dict(ydl_opts)
-        if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-            cookie_opts["cookiefile"] = str(COOKIE_FILE)
-        if YTDLP_PROXY:
-            cookie_opts["proxy"] = YTDLP_PROXY
-        cookie_opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android_vr", "android", "ios"]
+            # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
+            if not filepath or not Path(filepath).exists():
+                media_files = [
+                    f for f in out_dir.glob("*") 
+                    if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mp3", ".m4a")
+                ]
+                if media_files:
+                    media_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    filepath = str(media_files[0])
+
+            downloaded_sub_file = None
+            sub_lang_used = "am"
+            if subtitles and filepath:
+                p = Path(filepath)
+                for ext in (".am.srt", ".en.srt", ".srt", ".am.vtt", ".en.vtt", ".vtt"):
+                    sp = p.with_suffix(ext)
+                    if sp.exists():
+                        downloaded_sub_file = sp
+                        if "en" in ext:
+                            sub_lang_used = "en"
+                        break
+
+            if filepath and downloaded_sub_file and quality not in ("audio", "m4a"):
+                try:
+                    filepath = str(_burn_or_embed_subtitle(Path(filepath), downloaded_sub_file, lang=sub_lang_used))
+                except Exception as e:
+                    logger.warning(f"Subtitle embedding failed: {e}")
+
+            thumb_path = None
+            if filepath:
+                p = Path(filepath)
+                for ext in (".jpg", ".webp", ".png"):
+                    tp = p.with_suffix(ext)
+                    if tp.exists():
+                        thumb_path = str(tp)
+                        break
+
+            title = info.get("title") if info else "Video"
+            return {
+                "title": title,
+                "path": filepath,
+                "thumb_path": thumb_path,
+                "duration": info.get("duration") if info else None,
             }
-        }
-        for candidate_fmt in format_candidates:
-            try:
-                current_opts = dict(cookie_opts)
-                current_opts["format"] = candidate_fmt
-                if candidate_fmt != fmt:
-                    current_opts.pop("postprocessors", None)
-                with yt_dlp.YoutubeDL(current_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                if info:
-                    last_err = None
-                    break
-            except Exception as e:
-                logger.warning(f"Stage 2 (cookie) download attempt with format '{candidate_fmt}' failed for {url}: {e}")
-                last_err = str(e)
-
-    filepath = None
-    if info and info.get("requested_downloads"):
-        filepath = info["requested_downloads"][0].get("filepath")
-    if not filepath and info:
-        filepath = ydl.prepare_filename(info) if 'ydl' in locals() else None
-        
-    if quality == "audio" and filepath:
-        filepath = str(Path(filepath).with_suffix(".mp3"))
-    elif quality == "m4a" and filepath:
-        filepath = str(Path(filepath).with_suffix(".m4a"))
-
-    # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
-    if not filepath or not Path(filepath).exists():
-        media_files = [
-            f for f in out_dir.glob("*") 
-            if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mp3", ".m4a")
-        ]
-        if media_files:
-            media_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            filepath = str(media_files[0])
-
-    downloaded_sub_file = None
-    sub_lang_used = "am"
-    if subtitles and filepath:
-        p = Path(filepath)
-        for ext in (".am.srt", ".en.srt", ".srt", ".am.vtt", ".en.vtt", ".vtt"):
-            sp = p.with_suffix(ext)
-            if sp.exists():
-                downloaded_sub_file = sp
-                if "en" in ext:
-                    sub_lang_used = "en"
-                break
-
-    if filepath and downloaded_sub_file and quality not in ("audio", "m4a"):
-        try:
-            filepath = str(_burn_or_embed_subtitle(Path(filepath), downloaded_sub_file, lang=sub_lang_used))
         except Exception as e:
-            logger.warning(f"Subtitle embedding failed: {e}")
+            last_exception = e
+            logger.warning(f"Download attempt with {client_list} failed: {e}")
+            continue
 
-    thumb_path = None
-    if filepath:
-        p = Path(filepath)
-        for ext in (".jpg", ".webp", ".png"):
-            tp = p.with_suffix(ext)
-            if tp.exists():
-                thumb_path = str(tp)
-                break
-
-    title = info.get("title") if info else "Video"
-    return {
-        "title": title,
-        "path": filepath,
-        "thumb_path": thumb_path,
-        "duration": info.get("duration") if info else None,
-        "error": last_err,
-    }
+    if last_exception:
+        raise last_exception
+    raise Exception("Download failed after all client retries.")
 
 
 # ---------- UI Builders ----------
@@ -616,11 +552,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         vid_url = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
                         urls.append(vid_url)
                 else:
-                    if x != "video" and len(x) >= 3:
-                        if x.startswith("http"):
-                            urls.append(x)
-                        else:
-                            urls.append(f"https://www.youtube.com/watch?v={x}")
+                    if len(x) >= 3:
+                        urls.append(f"https://www.youtube.com/watch?v={x}")
 
             if not urls and session and session.get("entries"):
                 entries = session["entries"]
@@ -674,7 +607,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     logger.exception(f"Failed downloading {u}")
                     err_txt = str(e)
                     if "Sign in" in err_txt or "bot" in err_txt:
-                        await update.message.reply_text(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
+                        await update.message.reply_text(
+                            f"⚠️ **YouTube Bot Verification Required:**\n\n"
+                            f"YouTube is blocking downloads from this cloud server IP.\n\n"
+                            f"💡 **Easy Fix (Takes 30 Seconds):**\n"
+                            f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
+                            f"2. Log in to YouTube -> Export `cookies.txt`.\n"
+                            f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
+                            f"*(Or add a free proxy URL to `YTDLP_PROXY` in Render Environment!)*",
+                            parse_mode="Markdown"
+                        )
                     else:
                         await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
                 finally:
@@ -729,7 +671,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.exception("Failed to fetch info")
         err_str = str(e)
         if "Sign in" in err_str or "bot" in err_str or "429" in err_str:
-            await status_msg.edit_text("⚠️ YouTube is currently enforcing bot verification for this specific video. Please try another video or playlist link!")
+            await status_msg.edit_text(
+                "⚠️ **YouTube Bot Verification Required:**\n\n"
+                "YouTube is blocking info extraction from this cloud server IP.\n\n"
+                "💡 **Easy Fix (Takes 30 Seconds):**\n"
+                "1. Open Chrome -> Install extension **'Get cookies.txt LOCALLY'**.\n"
+                "2. Export `cookies.txt` from youtube.com.\n"
+                "3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
+                "*(Or set a proxy URL in Render Environment tab: `YTDLP_PROXY`)*",
+                parse_mode="Markdown"
+            )
         else:
             await status_msg.edit_text(f"❌ Couldn't read that link: {e}")
         return
@@ -1053,7 +1004,16 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
             logger.exception(f"Failed downloading {u}")
             err_txt = str(e)
             if "Sign in" in err_txt or "bot" in err_txt:
-                await chat.send_message(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
+                await chat.send_message(
+                    f"⚠️ **YouTube Bot Verification Required:**\n\n"
+                    f"YouTube is blocking downloads from this cloud server IP.\n\n"
+                    f"💡 **Easy Fix (Takes 30 Seconds):**\n"
+                    f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
+                    f"2. Log in to YouTube -> Export `cookies.txt`.\n"
+                    f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
+                    f"*(Or add a free proxy URL to `YTDLP_PROXY` in Render Environment!)*",
+                    parse_mode="Markdown"
+                )
             else:
                 await chat.send_message(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
         finally:
@@ -1075,32 +1035,11 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 
 async def _send_result(chat, item: dict) -> None:
     if not item.get("path"):
-        err_msg = str(item.get("error", ""))
-        if "Sign in" in err_msg or "bot" in err_msg or "cookies" in err_msg:
-            proxy_hint = "" if YTDLP_PROXY else (
-                "\n💡 **If cookies alone don't fix it:** YouTube often still "
-                "blocks Render's shared IPs even with valid cookies. Add a "
-                "residential proxy URL as `YTDLP_PROXY` in Render's "
-                "Environment tab (e.g. `http://user:pass@host:port`) — this "
-                "fixes it in most cases where cookies alone don't.\n"
-            )
-            await chat.send_message(
-                f"⚠️ **YouTube Bot Verification Required:**\n\n"
-                f"YouTube is blocking '{item['title']}' from this cloud server.\n\n"
-                f"1. Cookies may have expired — re-export from 'Get cookies.txt LOCALLY' "
-                f"and update `YOUTUBE_COOKIES` in Render Environment.\n"
-                f"2. Use a secondary Google account for the cookies, not your main one.\n"
-                f"{proxy_hint}",
-                parse_mode="Markdown"
-            )
-        else:
-            err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
-            await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
+        await chat.send_message(f"❌ Couldn't find output file for '{item['title']}'.")
         return
     path = Path(item["path"])
     if not path.exists():
-        err_detail = f"\nReason: `{item.get('error')}`" if item.get("error") else ""
-        await chat.send_message(f"❌ Couldn't find file for '{item['title']}'.{err_detail}", parse_mode="Markdown")
+        await chat.send_message(f"❌ Couldn't find file for '{item['title']}'.")
         return
     
     thumb_path = item.get("thumb_path")
@@ -1161,7 +1100,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Deep-Link Index & Video ID Resolver...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Multi-Client Retry & YOUTUBE_COOKIES Env Support...")
     app.run_polling()
 
 
