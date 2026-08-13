@@ -67,6 +67,8 @@ if env_cookies:
         logger.warning(f"Could not write YOUTUBE_COOKIES: {e}")
 
 PROXY_URL = os.environ.get("YTDLP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+if PROXY_URL and ("host:port" in PROXY_URL or "user:pass" in PROXY_URL or "example" in PROXY_URL):
+    PROXY_URL = None
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
@@ -613,8 +615,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             f"💡 **Easy Fix (Takes 30 Seconds):**\n"
                             f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
                             f"2. Log in to YouTube -> Export `cookies.txt`.\n"
-                            f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
-                            f"*(Or add a free proxy URL to `YTDLP_PROXY` in Render Environment!)*",
+                            f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
                             parse_mode="Markdown"
                         )
                     else:
@@ -677,8 +678,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "💡 **Easy Fix (Takes 30 Seconds):**\n"
                 "1. Open Chrome -> Install extension **'Get cookies.txt LOCALLY'**.\n"
                 "2. Export `cookies.txt` from youtube.com.\n"
-                "3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
-                "*(Or set a proxy URL in Render Environment tab: `YTDLP_PROXY`)*",
+                "3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
                 parse_mode="Markdown"
             )
         else:
@@ -1010,8 +1010,7 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
                     f"💡 **Easy Fix (Takes 30 Seconds):**\n"
                     f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
                     f"2. Log in to YouTube -> Export `cookies.txt`.\n"
-                    f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n\n"
-                    f"*(Or add a free proxy URL to `YTDLP_PROXY` in Render Environment!)*",
+                    f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
                     parse_mode="Markdown"
                 )
             else:
@@ -1100,7 +1099,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Multi-Client Retry & YOUTUBE_COOKIES Env Support...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Proxy Safety Validator...")
     app.run_polling()
 
 
