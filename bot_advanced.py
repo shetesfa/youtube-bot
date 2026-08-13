@@ -242,8 +242,6 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
             }
         }
     }
-    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-        ydl_opts["cookiefile"] = str(COOKIE_FILE)
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
@@ -281,6 +279,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "b/best"
     ] if quality not in ("audio", "m4a") else [fmt, "ba/b/best", "best"]
 
+    # Stage 1: Try high-speed multi-client without forcing cookie skipping
     for candidate_fmt in format_candidates:
         try:
             current_opts = dict(ydl_opts)
@@ -293,8 +292,33 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
                 last_err = None
                 break
         except Exception as e:
-            logger.warning(f"Download attempt with format '{candidate_fmt}' failed for {url}: {e}")
+            logger.warning(f"Stage 1 download attempt with format '{candidate_fmt}' failed for {url}: {e}")
             last_err = str(e)
+
+    # Stage 2: Retry with cookies if Stage 1 failed and COOKIE_FILE exists
+    if not info and COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+        logger.info(f"Stage 1 failed. Retrying with cookies for {url}...")
+        cookie_opts = dict(ydl_opts)
+        cookie_opts["cookiefile"] = str(COOKIE_FILE)
+        cookie_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["mweb", "ios", "web"]
+            }
+        }
+        for candidate_fmt in format_candidates:
+            try:
+                current_opts = dict(cookie_opts)
+                current_opts["format"] = candidate_fmt
+                if candidate_fmt != fmt:
+                    current_opts.pop("postprocessors", None)
+                with yt_dlp.YoutubeDL(current_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                if info:
+                    last_err = None
+                    break
+            except Exception as e:
+                logger.warning(f"Stage 2 (cookie) download attempt with format '{candidate_fmt}' failed for {url}: {e}")
+                last_err = str(e)
 
     filepath = None
     if info and info.get("requested_downloads"):
