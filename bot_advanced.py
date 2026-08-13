@@ -66,11 +66,21 @@ DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 COOKIE_FILE = Path("cookies.txt")
-if not COOKIE_FILE.exists() and os.environ.get("YOUTUBE_COOKIES"):
+# Always (re)write cookies.txt from the env var on every startup, so an
+# updated YOUTUBE_COOKIES value takes effect on redeploy instead of being
+# ignored because an old cookies.txt already exists on disk.
+if os.environ.get("YOUTUBE_COOKIES"):
     try:
         COOKIE_FILE.write_text(os.environ["YOUTUBE_COOKIES"])
+        logger.info("Loaded YOUTUBE_COOKIES into cookies.txt")
     except Exception as e:
         logger.warning(f"Could not write YOUTUBE_COOKIES to cookies.txt: {e}")
+
+# Optional residential/rotating proxy, e.g. http://user:pass@host:port
+# Set this in Render -> Environment as YTDLP_PROXY. Cloud provider IPs
+# (Render, AWS, etc.) are flagged by YouTube far more aggressively than
+# residential IPs, so a proxy fixes cases cookies alone can't.
+YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "").strip() or None
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
@@ -178,11 +188,17 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction with multi-client rotation."""
+    """Sub-second metadata extraction with multi-client rotation.
+
+    Cookies and the optional proxy are attached from the very first
+    attempt (not just as a last-resort fallback), and tv/mweb clients are
+    tried first since they currently need PO tokens less often than the
+    android clients.
+    """
     clients = [
-        ["android", "android_vr", "tv_embedded"],
+        ["tv_embedded", "web_safari", "mweb"],
         ["android_vr", "android"],
-        ["mweb", "ios"]
+        ["mweb", "ios"],
     ]
     last_err = None
     for client_list in clients:
@@ -202,6 +218,8 @@ def _get_info(url: str) -> dict:
             }
             if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
                 ydl_opts["cookiefile"] = str(COOKIE_FILE)
+            if YTDLP_PROXY:
+                ydl_opts["proxy"] = YTDLP_PROXY
             if FFMPEG_PATH:
                 ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
@@ -238,12 +256,18 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "android_vr", "tv_embedded"]
+                "player_client": ["tv_embedded", "web_safari", "mweb"]
             }
         }
     }
     if FFMPEG_PATH:
         ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+    # Cookies and proxy are attached from the FIRST attempt now, not only
+    # as a last-resort fallback after everything else already failed.
+    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+        ydl_opts["cookiefile"] = str(COOKIE_FILE)
+    if YTDLP_PROXY:
+        ydl_opts["proxy"] = YTDLP_PROXY
 
     if subtitles:
         ydl_opts.update({
@@ -279,7 +303,7 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
         "best"
     ] if quality not in ("audio", "m4a") else [fmt, "ba/b/best", "best"]
 
-    # Stage 1: Try high-speed multi-client without forcing cookie skipping
+    # Stage 1: high-speed attempt, tv/mweb clients, cookies + proxy already attached above
     for candidate_fmt in format_candidates:
         try:
             current_opts = dict(ydl_opts)
@@ -295,14 +319,18 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
             logger.warning(f"Stage 1 download attempt with format '{candidate_fmt}' failed for {url}: {e}")
             last_err = str(e)
 
-    # Stage 2: Retry with cookies if Stage 1 failed and COOKIE_FILE exists
-    if not info and COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-        logger.info(f"Stage 1 failed. Retrying with cookies for {url}...")
+    # Stage 2: retry with a different client combo (android family) in case
+    # tv/mweb got challenged but android clients still work for this video
+    if not info:
+        logger.info(f"Stage 1 failed. Retrying with android client set for {url}...")
         cookie_opts = dict(ydl_opts)
-        cookie_opts["cookiefile"] = str(COOKIE_FILE)
+        if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+            cookie_opts["cookiefile"] = str(COOKIE_FILE)
+        if YTDLP_PROXY:
+            cookie_opts["proxy"] = YTDLP_PROXY
         cookie_opts["extractor_args"] = {
             "youtube": {
-                "player_client": ["mweb", "ios", "web"]
+                "player_client": ["android_vr", "android", "ios"]
             }
         }
         for candidate_fmt in format_candidates:
@@ -1049,14 +1077,20 @@ async def _send_result(chat, item: dict) -> None:
     if not item.get("path"):
         err_msg = str(item.get("error", ""))
         if "Sign in" in err_msg or "bot" in err_msg or "cookies" in err_msg:
+            proxy_hint = "" if YTDLP_PROXY else (
+                "\n💡 **If cookies alone don't fix it:** YouTube often still "
+                "blocks Render's shared IPs even with valid cookies. Add a "
+                "residential proxy URL as `YTDLP_PROXY` in Render's "
+                "Environment tab (e.g. `http://user:pass@host:port`) — this "
+                "fixes it in most cases where cookies alone don't.\n"
+            )
             await chat.send_message(
                 f"⚠️ **YouTube Bot Verification Required:**\n\n"
-                f"YouTube is asking for authentication for '{item['title']}' on cloud server (Render).\n\n"
-                f"💡 **1-Minute Fix (Add Cookies to Render):**\n"
-                f"1. Install 'Get cookies.txt LOCALLY' extension in Chrome/Firefox.\n"
-                f"2. Export your cookies from YouTube.\n"
-                f"3. Go to **Render Dashboard** -> **Environment**.\n"
-                f"4. Add variable `YOUTUBE_COOKIES` and paste the cookies text!\n",
+                f"YouTube is blocking '{item['title']}' from this cloud server.\n\n"
+                f"1. Cookies may have expired — re-export from 'Get cookies.txt LOCALLY' "
+                f"and update `YOUTUBE_COOKIES` in Render Environment.\n"
+                f"2. Use a secondary Google account for the cookies, not your main one.\n"
+                f"{proxy_hint}",
                 parse_mode="Markdown"
             )
         else:
