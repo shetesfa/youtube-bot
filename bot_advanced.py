@@ -182,12 +182,12 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction with multi-client rotation."""
+    """Sub-second metadata extraction with web_creator as primary client."""
     clients = [
+        ["web_creator", "android"],
         ["tv_embedded", "android", "ios"],
         ["android_vr", "android", "ios", "mweb"],
-        ["ios", "mweb", "android"],
-        ["tv", "android"]
+        ["ios", "mweb", "android"]
     ]
     last_err = None
     for client_list in clients:
@@ -227,10 +227,10 @@ def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dic
     fmt = QUALITY_FORMATS.get(quality, QUALITY_FORMATS["720p"])
     
     client_configs = [
+        ["web_creator", "android"],
         ["tv_embedded", "android", "ios"],
         ["android_vr", "android", "ios", "mweb"],
-        ["ios", "mweb", "android"],
-        ["tv", "android"]
+        ["ios", "mweb", "android"]
     ]
 
     last_exception = None
@@ -1140,7 +1140,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Single-Video Regex Fallback...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Creator Studio API Extractor...")
     app.run_polling()
 
 
