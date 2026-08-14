@@ -676,6 +676,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         info = await loop.run_in_executor(None, _get_info, url)
     except Exception as e:
         logger.exception("Failed to fetch info")
+        
+        # Single Video ID Regex Fallback: Never fail on single video links!
+        vid_match = re.search(r'(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})', url)
+        if vid_match and "list=" not in url:
+            vid_id = vid_match.group(1)
+            clean_url = f"https://www.youtube.com/watch?v={vid_id}"
+            SESSIONS[user_id] = {
+                "url": clean_url,
+                "title": f"YouTube Video ({vid_id})",
+                "single": True,
+                "quality": "720p",
+                "subtitles": False,
+            }
+            await status_msg.delete()
+            caption = (
+                f"🎬 **YouTube Video** (`{vid_id}`)\n\n"
+                f"⚙️ *Choose your preferred quality below and tap Start:* "
+            )
+            thumb_url = f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+            try:
+                await update.effective_chat.send_photo(
+                    photo=thumb_url,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    reply_markup=_get_quality_keyboard("720p", False)
+                )
+                return
+            except Exception:
+                await update.effective_chat.send_message(
+                    caption,
+                    parse_mode="Markdown",
+                    reply_markup=_get_quality_keyboard("720p", False)
+                )
+                return
+
         err_str = str(e)
         if "Sign in" in err_str or "bot" in err_str or "429" in err_str:
             await status_msg.edit_text(
@@ -1105,7 +1140,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Auto-Cookie Environment Detector...")
+    logger.info("Tesfa YouTube Downloader Bot starting with Single-Video Regex Fallback...")
     app.run_polling()
 
 
