@@ -19,6 +19,7 @@ import os
 import re
 import math
 import json
+import base64
 import logging
 import asyncio
 import threading
@@ -29,6 +30,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from PIL import Image
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, WebAppInfo
+from telegram.error import InvalidToken, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -51,30 +53,163 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8947851594:AAF4AC_vVSxxYMChCcysPULPafaCMkcC2To")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 COOKIE_FILE = Path("cookies.txt")
 
-# Auto-detect cookie text from ANY Environment Variable in Render
-found_cookie_text = None
-for k, v in os.environ.items():
-    if v and ("# Netscape HTTP Cookie File" in v or "LOGIN_INFO" in v or ".youtube.com" in v):
-        found_cookie_text = v
-        logger.info(f"Auto-detected YouTube cookies from environment variable '{k}'!")
-        break
+def init_youtube_cookies() -> Path | None:
+    """Safely loads YouTube cookies from YOUTUBE_COOKIES or COOKIE_FILE env vars."""
+    cookie_content = (
+        os.environ.get("YOUTUBE_COOKIES")
+        or os.environ.get("YOUTUBE_COOKIE")
+        or os.environ.get("COOKIES")
+    )
+    cookie_file_path = os.environ.get("YOUTUBE_COOKIE_FILE") or os.environ.get("COOKIE_FILE")
 
-if found_cookie_text:
-    try:
-        COOKIE_FILE.write_text(found_cookie_text.strip(), encoding="utf-8")
-        logger.info("Successfully wrote cookies.txt from environment variable!")
-    except Exception as e:
-        logger.warning(f"Could not write COOKIE_FILE: {e}")
+    if cookie_file_path and Path(cookie_file_path).exists() and Path(cookie_file_path).stat().st_size > 0:
+        return Path(cookie_file_path)
 
-PROXY_URL = os.environ.get("YTDLP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
-if PROXY_URL and ("host:port" in PROXY_URL or "user:pass" in PROXY_URL or "example" in PROXY_URL):
-    PROXY_URL = None
+    if cookie_content and cookie_content.strip():
+        raw_text = cookie_content.strip()
+        # Handle optional Base64 encoding (useful for multi-line env vars on Render)
+        if not ("\t" in raw_text or "\n" in raw_text or "#" in raw_text):
+            try:
+                decoded = base64.b64decode(raw_text).decode("utf-8", errors="ignore")
+                if "# Netscape" in decoded or ".youtube.com" in decoded or "\t" in decoded:
+                    raw_text = decoded
+            except Exception:
+                pass
+
+        try:
+            COOKIE_FILE.write_text(raw_text, encoding="utf-8")
+            return COOKIE_FILE
+        except Exception as e:
+            logger.warning(f"Could not write COOKIE_FILE: {e}")
+
+    # Fallback to local file if present and valid
+    if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
+        return COOKIE_FILE
+
+    return None
+
+def get_proxy_url() -> str | None:
+    """Returns proxy URL from environment variables if properly configured."""
+    raw_proxy = (
+        os.environ.get("YTDLP_PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("ALL_PROXY")
+    )
+    if not raw_proxy:
+        return None
+    proxy = raw_proxy.strip().strip("'\"")
+    if proxy.lower() in ("http://host:port", "http://user:pass@host:port", "none", "false", "null", ""):
+        return None
+    return proxy
+
+def get_client_configs() -> list[list[str] | None]:
+    """Returns prioritized player client strategies for yt-dlp to bypass cloud IP blocks."""
+    return [
+        # 1. Android VR & Android (Bypasses web bot checks on datacenter IPs without cookies)
+        ["android_vr", "android", "web_safari"],
+        # 2. Android + iOS + Mobile Web
+        ["android", "ios", "mweb"],
+        # 3. TV & Downgraded TV (Living room endpoints, high stability)
+        ["tv", "tv_downgraded", "android"],
+        # 4. Standard Web & Creator (Best when valid cookies are available)
+        ["web", "web_creator"],
+        # 5. Default yt-dlp client resolution fallback
+        None,
+    ]
+
+def classify_error(e: Exception) -> dict:
+    """Classifies extraction/download errors to provide accurate diagnostic feedback."""
+    err_str = str(e).lower()
+    cookie_path = init_youtube_cookies()
+    has_cookie = cookie_path is not None and cookie_path.exists() and cookie_path.stat().st_size > 0
+    has_proxy = get_proxy_url() is not None
+
+    if any(k in err_str for k in ["sign in to confirm your age", "age-restricted", "inappropriate"]):
+        return {
+            "type": "AGE_RESTRICTED",
+            "title": "🔞 **Age-Restricted Video**",
+            "reason": "This video requires YouTube account age verification.",
+            "action": (
+                "Provide YouTube account cookies in `YOUTUBE_COOKIES` env var on Render so the bot can authenticate."
+                if not has_cookie else
+                "Your configured `YOUTUBE_COOKIES` does not have verified age access or has expired. Please refresh your cookies."
+            )
+        }
+    elif any(k in err_str for k in ["private video", "members-only", "join this channel", "premium"]):
+        return {
+            "type": "PRIVATE_OR_MEMBERS_ONLY",
+            "title": "🔒 **Private / Member-Only Content**",
+            "reason": "This video is private or restricted to channel members.",
+            "action": (
+                "Provide YouTube account cookies in `YOUTUBE_COOKIES` with access to this video."
+                if not has_cookie else
+                "The configured account cookies do not have permission to view this video."
+            )
+        }
+    elif any(k in err_str for k in ["not a bot", "bot verification", "bot detection", "sign in to confirm", "http error 429", "too many requests", "429", "unauthorized"]):
+        if not has_cookie and not has_proxy:
+            return {
+                "type": "CLOUD_IP_BLOCKED",
+                "title": "🛡️ **YouTube Cloud Datacenter IP Block (Render)**",
+                "reason": "YouTube has rate-limited or flagged this cloud server IP address because Render's IP pool is shared by many applications.",
+                "action": (
+                    "**How to permanently resolve this on Render:**\n"
+                    "1. **Set `YTDLP_PROXY`** in Render Environment with a residential proxy (`http://user:pass@host:port`), OR\n"
+                    "2. **Set `YOUTUBE_COOKIES`** in Render Environment with exported Netscape YouTube cookies."
+                )
+            }
+        elif has_cookie and not has_proxy:
+            return {
+                "type": "EXPIRED_COOKIES_OR_IP_BLOCK",
+                "title": "⚠️ **YouTube Authentication / IP Restriction**",
+                "reason": "Configured YouTube cookies were rejected or YouTube is enforcing an interactive IP verification challenge on this cloud datacenter IP.",
+                "action": "Refresh your `YOUTUBE_COOKIES` in Render or configure a residential proxy using `YTDLP_PROXY`."
+            }
+        else:
+            return {
+                "type": "PROXY_ERROR",
+                "title": "⚠️ **Proxy / Network Verification Failed**",
+                "reason": "YouTube rejected the request through the configured proxy.",
+                "action": "Please verify that your `YTDLP_PROXY` credentials and endpoint are working."
+            }
+    elif any(k in err_str for k in ["not a valid url", "unsupported url", "invalidscheme", "not a youtube"]):
+        return {
+            "type": "INVALID_URL",
+            "title": "❌ **Invalid YouTube Link**",
+            "reason": "The provided link is not a recognized YouTube URL.",
+            "action": "Please provide a valid `youtube.com` or `youtu.be` link."
+        }
+    elif "requested format is not available" in err_str:
+        return {
+            "type": "FORMAT_UNAVAILABLE",
+            "title": "🎥 **Format Unavailable**",
+            "reason": "The selected resolution is not available for this video stream.",
+            "action": "Try selecting 720p, 480p, or MP3 audio."
+        }
+    else:
+        return {
+            "type": "RUNTIME_ERROR",
+            "title": "❌ **Processing Error**",
+            "reason": f"`{str(e)[:250]}`",
+            "action": "Please check that the YouTube link is valid and public."
+        }
+
+def format_friendly_error(e: Exception, url: str = "") -> str:
+    """Formats a categorized error into clear Telegram Markdown for the user."""
+    info = classify_error(e)
+    msg = f"{info['title']}\n\n"
+    if url:
+        msg += f"🔗 **URL:** `{url}`\n"
+    msg += f"📌 **Cause:** {info['reason']}\n\n"
+    msg += f"💡 **Recommended Fix:**\n{info['action']}"
+    return msg
 
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
 MAX_PARALLEL_DOWNLOADS = 8
@@ -182,168 +317,182 @@ def _burn_or_embed_subtitle(video_path: Path, sub_path: Path, lang: str = "am") 
 # ---------- Fast yt-dlp helpers ----------
 
 def _get_info(url: str) -> dict:
-    """Sub-second metadata extraction with web_creator as primary client."""
-    clients = [
-        ["web_creator", "android"],
-        ["tv_embedded", "android", "ios"],
-        ["android_vr", "android", "ios", "mweb"],
-        ["ios", "mweb", "android"]
-    ]
+    """Sub-second metadata extraction with multi-client and cookieless fallback."""
+    client_configs = get_client_configs()
+    cookie_path = init_youtube_cookies()
+    proxy = get_proxy_url()
     last_err = None
-    for client_list in clients:
-        try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": "in_playlist",
-                "skip_download": True,
-                "socket_timeout": 10,
-                "playlistend": 250,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": client_list
-                    }
-                }
-            }
-            if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-                ydl_opts["cookiefile"] = str(COOKIE_FILE)
-            if PROXY_URL:
-                ydl_opts["proxy"] = PROXY_URL
-            if FFMPEG_PATH:
-                ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(url, download=False)
-        except Exception as e:
-            last_err = e
-            continue
+    # Try first with configured cookies, then fallback without cookies if blocked
+    cookie_attempts = [cookie_path] if cookie_path else [None]
+    if cookie_path:
+        cookie_attempts.append(None)
+
+    for current_cookie in cookie_attempts:
+        for client_list in client_configs:
+            try:
+                ydl_opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "extract_flat": "in_playlist",
+                    "skip_download": True,
+                    "socket_timeout": 12,
+                    "playlistend": 250,
+                    "js_runtimes": {"node": {}},
+                }
+                if client_list is not None:
+                    ydl_opts["extractor_args"] = {
+                        "youtube": {
+                            "player_client": client_list
+                        }
+                    }
+                if current_cookie and current_cookie.exists() and current_cookie.stat().st_size > 0:
+                    ydl_opts["cookiefile"] = str(current_cookie)
+                if proxy:
+                    ydl_opts["proxy"] = proxy
+                if FFMPEG_PATH:
+                    ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    return ydl.extract_info(url, download=False)
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Metadata extraction (cookie={bool(current_cookie)}, client={client_list}) failed: {e}")
+                continue
+
     if last_err:
         raise last_err
-    raise Exception("Could not fetch video info.")
+    raise Exception("Could not fetch video info after trying all extraction strategies.")
 
 
 def _download_one(url: str, out_dir: Path, quality: str, subtitles: bool) -> dict:
     outtmpl = str(out_dir / "%(title)s.%(ext)s")
     fmt = QUALITY_FORMATS.get(quality, QUALITY_FORMATS["720p"])
-    
-    client_configs = [
-        ["web_creator", "android"],
-        ["tv_embedded", "android", "ios"],
-        ["android_vr", "android", "ios", "mweb"],
-        ["ios", "mweb", "android"]
-    ]
-
+    client_configs = get_client_configs()
+    cookie_path = init_youtube_cookies()
+    proxy = get_proxy_url()
     last_exception = None
 
-    for client_list in client_configs:
-        try:
-            ydl_opts = {
-                "format": fmt,
-                "outtmpl": outtmpl,
-                "writethumbnail": True,
-                "quiet": True,
-                "no_warnings": True,
-                "noplaylist": True,
-                "ignoreerrors": False,
-                "concurrent_fragment_downloads": 5,
-                "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": client_list
-                    }
+    # Try first with configured cookies, then fallback without cookies if blocked
+    cookie_attempts = [cookie_path] if cookie_path else [None]
+    if cookie_path:
+        cookie_attempts.append(None)
+
+    for current_cookie in cookie_attempts:
+        for client_list in client_configs:
+            try:
+                ydl_opts = {
+                    "format": fmt,
+                    "outtmpl": outtmpl,
+                    "writethumbnail": True,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "noplaylist": True,
+                    "ignoreerrors": False,
+                    "concurrent_fragment_downloads": 5,
+                    "merge_output_format": "mp4" if quality not in ("audio", "m4a") else None,
+                    "socket_timeout": 20,
+                    "retries": 3,
+                    "fragment_retries": 3,
+                    "js_runtimes": {"node": {}},
                 }
-            }
-            if COOKIE_FILE.exists() and COOKIE_FILE.stat().st_size > 0:
-                ydl_opts["cookiefile"] = str(COOKIE_FILE)
-            if PROXY_URL:
-                ydl_opts["proxy"] = PROXY_URL
-            if FFMPEG_PATH:
-                ydl_opts["ffmpeg_location"] = FFMPEG_PATH
+                if client_list is not None:
+                    ydl_opts["extractor_args"] = {
+                        "youtube": {
+                            "player_client": client_list
+                        }
+                    }
+                if current_cookie and current_cookie.exists() and current_cookie.stat().st_size > 0:
+                    ydl_opts["cookiefile"] = str(current_cookie)
+                if proxy:
+                    ydl_opts["proxy"] = proxy
+                if FFMPEG_PATH:
+                    ydl_opts["ffmpeg_location"] = FFMPEG_PATH
 
-            if subtitles:
-                ydl_opts.update({
-                    "writesubtitles": True,
-                    "writeautomaticsub": True,
-                    "subtitleslangs": ["am", "en", "am.*", "en.*"],
-                    "subtitlesformat": "srt",
-                })
-            
-            if quality == "audio":
-                ydl_opts["postprocessors"] = [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    },
-                    {"key": "FFmpegMetadata"},
-                ]
-            elif quality == "m4a":
-                ydl_opts["postprocessors"] = [
-                    {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
-                    {"key": "FFmpegMetadata"},
-                ]
+                if subtitles:
+                    ydl_opts.update({
+                        "writesubtitles": True,
+                        "writeautomaticsub": True,
+                        "subtitleslangs": ["am", "en", "am.*", "en.*"],
+                        "subtitlesformat": "srt",
+                    })
+                
+                if quality == "audio":
+                    ydl_opts["postprocessors"] = [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192",
+                        },
+                        {"key": "FFmpegMetadata"},
+                    ]
+                elif quality == "m4a":
+                    ydl_opts["postprocessors"] = [
+                        {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
+                        {"key": "FFmpegMetadata"},
+                    ]
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filepath = None
-                if info and info.get("requested_downloads"):
-                    filepath = info["requested_downloads"][0].get("filepath")
-                if not filepath and info:
-                    filepath = ydl.prepare_filename(info)
-                    
-                if quality == "audio" and filepath:
-                    filepath = str(Path(filepath).with_suffix(".mp3"))
-                elif quality == "m4a" and filepath:
-                    filepath = str(Path(filepath).with_suffix(".m4a"))
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filepath = None
+                    if info and info.get("requested_downloads"):
+                        filepath = info["requested_downloads"][0].get("filepath")
+                    if not filepath and info:
+                        filepath = ydl.prepare_filename(info)
+                        
+                    if quality == "audio" and filepath:
+                        filepath = str(Path(filepath).with_suffix(".mp3"))
+                    elif quality == "m4a" and filepath:
+                        filepath = str(Path(filepath).with_suffix(".m4a"))
 
-            # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
-            if not filepath or not Path(filepath).exists():
-                media_files = [
-                    f for f in out_dir.glob("*") 
-                    if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mp3", ".m4a")
-                ]
-                if media_files:
-                    media_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                    filepath = str(media_files[0])
+                # Robust 100% File Detection: Find newest downloaded video/audio file in out_dir
+                if not filepath or not Path(filepath).exists():
+                    media_files = [
+                        f for f in out_dir.glob("*") 
+                        if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mp3", ".m4a")
+                    ]
+                    if media_files:
+                        media_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                        filepath = str(media_files[0])
 
-            downloaded_sub_file = None
-            sub_lang_used = "am"
-            if subtitles and filepath:
-                p = Path(filepath)
-                for ext in (".am.srt", ".en.srt", ".srt", ".am.vtt", ".en.vtt", ".vtt"):
-                    sp = p.with_suffix(ext)
-                    if sp.exists():
-                        downloaded_sub_file = sp
-                        if "en" in ext:
-                            sub_lang_used = "en"
-                        break
+                downloaded_sub_file = None
+                sub_lang_used = "am"
+                if subtitles and filepath:
+                    p = Path(filepath)
+                    for ext in (".am.srt", ".en.srt", ".srt", ".am.vtt", ".en.vtt", ".vtt"):
+                        sp = p.with_suffix(ext)
+                        if sp.exists():
+                            downloaded_sub_file = sp
+                            if "en" in ext:
+                                sub_lang_used = "en"
+                            break
 
-            if filepath and downloaded_sub_file and quality not in ("audio", "m4a"):
-                try:
-                    filepath = str(_burn_or_embed_subtitle(Path(filepath), downloaded_sub_file, lang=sub_lang_used))
-                except Exception as e:
-                    logger.warning(f"Subtitle embedding failed: {e}")
+                if filepath and downloaded_sub_file and quality not in ("audio", "m4a"):
+                    try:
+                        filepath = str(_burn_or_embed_subtitle(Path(filepath), downloaded_sub_file, lang=sub_lang_used))
+                    except Exception as e:
+                        logger.warning(f"Subtitle embedding failed: {e}")
 
-            thumb_path = None
-            if filepath:
-                p = Path(filepath)
-                for ext in (".jpg", ".webp", ".png"):
-                    tp = p.with_suffix(ext)
-                    if tp.exists():
-                        thumb_path = str(tp)
-                        break
+                thumb_path = None
+                if filepath:
+                    p = Path(filepath)
+                    for ext in (".jpg", ".webp", ".png"):
+                        tp = p.with_suffix(ext)
+                        if tp.exists():
+                            thumb_path = str(tp)
+                            break
 
-            title = info.get("title") if info else "Video"
-            return {
-                "title": title,
-                "path": filepath,
-                "thumb_path": thumb_path,
-                "duration": info.get("duration") if info else None,
-            }
-        except Exception as e:
-            last_exception = e
-            logger.warning(f"Download attempt with {client_list} failed: {e}")
-            continue
+                title = info.get("title") if info else "Video"
+                return {
+                    "title": title,
+                    "path": filepath,
+                    "thumb_path": thumb_path,
+                    "duration": info.get("duration") if info else None,
+                }
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Download attempt (cookie={bool(current_cookie)}, client={client_list}) failed: {e}")
+                continue
 
     if last_exception:
         raise last_exception
@@ -613,19 +762,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await _send_result(update.effective_chat, result)
                 except Exception as e:
                     logger.exception(f"Failed downloading {u}")
-                    err_txt = str(e)
-                    if "Sign in" in err_txt or "bot" in err_txt:
-                        await update.message.reply_text(
-                            f"⚠️ **YouTube Bot Verification Required:**\n\n"
-                            f"YouTube is blocking downloads from this cloud server IP.\n\n"
-                            f"💡 **Easy Fix (Takes 30 Seconds):**\n"
-                            f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
-                            f"2. Log in to YouTube -> Export `cookies.txt`.\n"
-                            f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
-                            parse_mode="Markdown"
-                        )
-                    else:
-                        await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+                    error_msg = format_friendly_error(e, u)
+                    await update.message.reply_text(error_msg, parse_mode="Markdown")
                 finally:
                     await update_progress()
 
@@ -711,19 +849,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
                 return
 
-        err_str = str(e)
-        if "Sign in" in err_str or "bot" in err_str or "429" in err_str:
-            await status_msg.edit_text(
-                "⚠️ **YouTube Bot Verification Required:**\n\n"
-                "YouTube is blocking info extraction from this cloud server IP.\n\n"
-                "💡 **Easy Fix (Takes 30 Seconds):**\n"
-                "1. Open Chrome -> Install extension **'Get cookies.txt LOCALLY'**.\n"
-                "2. Export `cookies.txt` from youtube.com.\n"
-                "3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
-                parse_mode="Markdown"
-            )
-        else:
-            await status_msg.edit_text(f"❌ Couldn't read that link: {e}")
+        err_response = format_friendly_error(e, url)
+        await status_msg.edit_text(err_response, parse_mode="Markdown")
         return
 
     entries = info.get("entries")
@@ -865,11 +992,8 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await _send_result(update.effective_chat, result)
             except Exception as e:
                 logger.exception(f"Failed downloading {u}")
-                err_txt = str(e)
-                if "Sign in" in err_txt or "bot" in err_txt:
-                    await update.message.reply_text(f"⚠️ **Age-Restricted Video:** `{u}` requires sign in.", parse_mode="Markdown")
-                else:
-                    await update.message.reply_text(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+                error_msg = format_friendly_error(e, u)
+                await update.message.reply_text(error_msg, parse_mode="Markdown")
             finally:
                 await update_progress()
 
@@ -1043,19 +1167,8 @@ async def _run_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, use
             await _send_result(chat, result)
         except Exception as e:
             logger.exception(f"Failed downloading {u}")
-            err_txt = str(e)
-            if "Sign in" in err_txt or "bot" in err_txt:
-                await chat.send_message(
-                    f"⚠️ **YouTube Bot Verification Required:**\n\n"
-                    f"YouTube is blocking downloads from this cloud server IP.\n\n"
-                    f"💡 **Easy Fix (Takes 30 Seconds):**\n"
-                    f"1. Open Chrome on PC -> Install extension **'Get cookies.txt LOCALLY'**.\n"
-                    f"2. Log in to YouTube -> Export `cookies.txt`.\n"
-                    f"3. Copy text & paste into Render -> Environment tab -> `YOUTUBE_COOKIES`!\n",
-                    parse_mode="Markdown"
-                )
-            else:
-                await chat.send_message(f"❌ **Download Failed:** {u}\nReason: `{e}`", parse_mode="Markdown")
+            error_msg = format_friendly_error(e, u)
+            await chat.send_message(error_msg, parse_mode="Markdown")
         finally:
             await update_progress()
 
@@ -1130,19 +1243,63 @@ async def _send_result(chat, item: dict) -> None:
         )
 
 
+def validate_token(token: str) -> bool:
+    """Validates Telegram bot token structure."""
+    if not token or token == "PASTE_YOUR_TOKEN_HERE":
+        return False
+    parts = token.split(":", 1)
+    if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
+        return False
+    return True
+
+
 def main() -> None:
-    if not BOT_TOKEN or BOT_TOKEN == "PASTE_YOUR_TOKEN_HERE":
-        raise SystemExit("Set the BOT_TOKEN environment variable or edit bot_advanced.py with your token.")
+    token = os.environ.get("BOT_TOKEN", "").strip() or BOT_TOKEN
+    if not token:
+        logger.error("BOT_TOKEN environment variable is not set. Please set the BOT_TOKEN environment variable.")
+        raise SystemExit("Error: BOT_TOKEN environment variable is missing or empty. Please set BOT_TOKEN.")
+
+    if not validate_token(token):
+        logger.error("BOT_TOKEN format is invalid. Expected format: '<bot_id>:<token_secret>' (e.g., '123456789:ABCdef...').")
+        raise SystemExit("Error: BOT_TOKEN format is invalid. Telegram bot tokens must be in the format '<bot_id>:<token_secret>'.")
 
     start_health_server()
-    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Log operational environment setup
+    cookie_path = init_youtube_cookies()
+    if cookie_path:
+        logger.info(f"YouTube cookies active from: {cookie_path}")
+    else:
+        logger.info("No YouTube cookies configured (using cookieless mobile/VR client fallback).")
+        
+    proxy = get_proxy_url()
+    if proxy:
+        masked_proxy = re.sub(r":([^:@]+)@", r":***@", proxy)
+        logger.info(f"YTDLP_PROXY routing active: {masked_proxy}")
+    else:
+        logger.info("No proxy configured (direct cloud connection).")
+
+    try:
+        app = Application.builder().token(token).build()
+    except Exception as e:
+        logger.error(f"Failed to initialize Telegram application: {e}")
+        raise SystemExit(f"Error initializing Telegram application: {e}")
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    logger.info("Tesfa YouTube Downloader Bot starting with Creator Studio API Extractor...")
-    app.run_polling()
+    logger.info("Tesfa YouTube Downloader Bot starting with Multi-Client Extractor...")
+    try:
+        app.run_polling()
+    except InvalidToken:
+        logger.error("Failed to start bot: BOT_TOKEN was rejected by Telegram (InvalidToken/Unauthorized).")
+        raise SystemExit("Error: BOT_TOKEN is invalid or has been revoked by Telegram.")
+    except TelegramError as e:
+        logger.error(f"Telegram error occurred while running bot: {e}")
+        raise SystemExit(f"Error starting Telegram bot: {e}")
 
 
 if __name__ == "__main__":
     main()
+

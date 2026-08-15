@@ -1,5 +1,5 @@
 python-telegram-bot>=20.0
-git+https://github.com/yt-dlp/yt-dlp.git@master
+yt-dlp>=2024.3.10
 Pillow>=10.0.0
 imageio-ffmpeg>=0.4.8
 static-ffmpeg>=2.5

@@ -1,5 +1,4 @@
 @echo off
-E:
-cd youtube
+cd /d "%~dp0"
 python bot_advanced.py
 pause
