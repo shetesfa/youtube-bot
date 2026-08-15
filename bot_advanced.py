@@ -42,10 +42,16 @@ from telegram.ext import (
 import yt_dlp
 
 try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
+try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
-    FFMPEG_PATH = None
+    FFMPEG_PATH = "ffmpeg"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -112,15 +118,17 @@ def get_proxy_url() -> str | None:
 def get_client_configs() -> list[list[str] | None]:
     """Returns prioritized player client strategies for yt-dlp to bypass cloud IP blocks."""
     return [
-        # 1. Android VR & Android (Bypasses web bot checks on datacenter IPs without cookies)
-        ["android_vr", "android", "web_safari"],
+        # 1. Android + Web Safari + iOS (Best compatibility, no SABR 403 on AVC formats)
+        ["android", "web_safari", "ios"],
         # 2. Android + iOS + Mobile Web
         ["android", "ios", "mweb"],
         # 3. TV & Downgraded TV (Living room endpoints, high stability)
         ["tv", "tv_downgraded", "android"],
-        # 4. Standard Web & Creator (Best when valid cookies are available)
+        # 4. Android VR fallback
+        ["android_vr", "android"],
+        # 5. Standard Web & Creator (Best when valid cookies are available)
         ["web", "web_creator"],
-        # 5. Default yt-dlp client resolution fallback
+        # 6. Default yt-dlp client resolution fallback
         None,
     ]
 
@@ -218,12 +226,12 @@ ITEMS_PER_PAGE = 5
 SESSIONS: dict[int, dict] = {}
 
 QUALITY_FORMATS = {
-    "1080p": "b[height<=1080]/bv*[height<=1080]+ba/b/best",
-    "720p": "b[height<=720]/bv*[height<=720]+ba/b/best",
-    "480p": "b[height<=480]/bv*[height<=480]+ba/b/best",
+    "1080p": "bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=1080]+ba/b[height<=1080]/b/best",
+    "720p": "bv*[height<=720][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=720]+ba/b[height<=720]/b/best",
+    "480p": "bv*[height<=480][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=480]+ba/b[height<=480]/b/best",
     "360p": "b[height<=360]/bv*[height<=360]+ba/b/best",
-    "audio": "ba/b/best",
-    "m4a": "ba[ext=m4a]/ba/b/best",
+    "audio": "ba[acodec^=mp4a]/ba/b/best",
+    "m4a": "ba[ext=m4a]/ba[acodec^=mp4a]/ba/b/best",
 }
 
 def start_health_server():
